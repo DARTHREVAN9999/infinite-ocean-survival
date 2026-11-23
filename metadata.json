@@ -1,0 +1,6 @@
+{
+  "name": "Oceanbound: Survival of the Seas",
+  "description": "A 3D open-world ocean survival, exploration, trading, crew management, and strategic naval combat game.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

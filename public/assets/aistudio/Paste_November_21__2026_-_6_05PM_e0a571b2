@@ -1,0 +1,1252 @@
+# OCEANBOUND — MAJOR WORLD, FLEET WARFARE, GHOST SHIPS, WEATHER AND GAMEPLAY UPDATE
+
+Update the existing Oceanbound game with all the following changes.
+
+**IMPORTANT: Preserve all existing gameplay and features unless specifically instructed to change or remove them.** Keep the existing ocean physics, shipwrecks, gold, trading, ship upgrades, pirate factions, Crown Fleet, sea monsters, crew management, fleet building, journal, music and simplified naval combat.
+
+# 1. FIX AUTOMATIC CANNON FIRE
+
+Fix the existing combat bug where cannons sometimes stop automatically firing when fighting anything other than pirate ships.
+
+Automatic targeting and firing must work against EVERY hostile target, including:
+- Pirate ships.
+- Merchant and cargo ships that attack the player.
+- The Crown Fleet when hostile.
+- Sea monsters.
+- Ghost Ships.
+- Enemy fleets and flagships.
+- Other hostile NPC vessels.
+
+Cannons should automatically identify valid hostile targets, aim and fire when within range.
+
+Make sure:
+- Reload timers work correctly.
+- Cannons retarget when enemies sink or escape.
+- Different cannon types work correctly.
+- Crew assignments affect reload speed.
+- Enemy ships automatically fire at their targets.
+- Cannonballs successfully hit sea monsters and Ghost Ships.
+
+Combat must depend on whether something is hostile, not its ship category.
+
+# 2. SIMPLIFY NAVAL COMBAT CONTROLS
+
+Remove the bracing, defending and automatic escaping combat options.
+
+The player should not need separate buttons to brace, defend or escape.
+
+Keep naval combat simple:
+- Cannons automatically aim and fire at hostile targets.
+- The player manually steers using WASD.
+- The player can manually attempt to escape by sailing away.
+- Space gradually stops the ship.
+- The only special combat option button should be SURRENDER.
+
+### Manual escape
+
+The player should simply turn their ship around and sail away using normal controls.
+
+Do not display an escape button or automatically make the ship flee.
+
+Enemies should pursue the player if appropriate. Escaping should depend on speed, steering, distance and enemy behaviour.
+
+### Surrender button
+
+Keep one clearly visible SURRENDER button during combat.
+
+When pressed:
+- Stop resisting.
+- Allow the enemy to demand gold, resources or cargo.
+- Deduct the agreed amount from the player's inventory.
+- End the encounter if the enemy accepts.
+
+Different enemies should make different surrender demands.
+
+# 3. MORE SHIP TYPES AND A LIVING OCEAN
+
+Add historically inspired sailing vessels:
+
+- Small fishing boats.
+- Large fishing vessels and food trawlers.
+- Small merchant boats.
+- Medium merchant ships.
+- Large merchant and cargo vessels.
+- Passenger and travel ships.
+- Supply and transport ships.
+- Wealthy trading vessels.
+- Small pirate boats.
+- Medium pirate ships.
+- Large pirate vessels.
+- Armed naval and patrol ships.
+- Rare treasure ships.
+- Crown Fleet vessels.
+
+Each ship should have detailed 3D models, sails, hull designs, crew, size, cargo and behaviour.
+
+Ships should travel independently along routes, encounter one another and react to dangers.
+
+# 4. MERCHANTS, TRADING AND VALUABLE CARGO
+
+Create different sizes and types of merchant ships with different inventories.
+
+- Small merchants mainly sell timber, iron and cloth.
+- Medium merchants carry larger quantities of basic materials and ship equipment.
+- Large merchants carry substantial quantities of resources, weapons and specialised upgrades.
+- Wealthy merchants occasionally sell rare construction materials, advanced equipment, dyes and flag designs.
+
+### Fishing trawlers
+
+**Fishing trawlers must ONLY sell provisions and fresh water.**
+
+They must not sell construction materials, cannons, weapons or other equipment.
+
+### Valuable cargo
+
+Include:
+- Jewellery.
+- Precious decorations.
+- Silk and expensive fabrics.
+- Rare spices.
+- Fine furniture.
+- Paintings and artwork.
+- Antiques.
+- Luxury goods.
+- Rare imported goods.
+
+Different merchants must pay different prices for valuable cargo.
+
+For example:
+
+<escape>RARE JEWELLERY
+Merchant A: 45 gold each
+Merchant B: 85 gold each
+Wealthy Merchant: 140 gold each</escape>
+
+Actual prices should vary.
+
+Allow the player to store valuable cargo aboard their ship, compare merchant offers and decide when to sell.
+
+Merchants should have limited purchasing budgets and changing demand.
+
+Prevent infinite gold exploits through buying and selling.
+
+# 5. PIRATE APPEARANCE AND FACTIONS
+
+Create at least 8–12 distinct pirate factions, with the possibility of additional smaller groups.
+
+Each faction should have:
+- Unique name and flag.
+- Distinctive sail colours.
+- Matching crew clothing and costumes.
+- Different personalities.
+- Preferred hunting areas.
+- Different relationships with other factions.
+- Leaders and important captains.
+
+**Pirate ships must use the same general hull designs as ordinary sailing vessels of equivalent sizes.**
+
+Their primary visual differences should be their flags, sail colours and crew clothing.
+
+When the player changes their custom flag, automatically apply its main colours to their sails and crew clothing.
+
+# 6. DIFFERENT SHIP CLASSES FOR PIRATES AND THE CROWN FLEET
+
+### Pirate ship classes
+
+Include:
+- Raider Boats.
+- Corsairs.
+- Pirate Brigs.
+- Pirate Frigates.
+- Pirate Galleons.
+- Pirate Flagships.
+- Supply Ships.
+
+### Crown Fleet ship classes
+
+Include:
+- Patrol Cutters.
+- Naval Sloops.
+- Corvettes.
+- Frigates.
+- Heavy Warships.
+- Ships of the Line.
+- Naval Flagships.
+- Supply Ships.
+
+Each class should have different sizes, speeds, cannon capacities, crew capacities and purposes.
+
+Every class should use historically inspired sailing ship designs.
+
+# 7. PIRATE FLEETS, ARMADAS AND BOSSES
+
+Some pirate groups should travel together in organised fleets containing flagships, medium vessels, smaller escorts and supply ships.
+
+Some factions should form enormous armadas containing several flagships and ships from allied factions.
+
+Pirate factions should fight each other, form alliances, betray each other and compete over territory and treasure.
+
+### Pirate ranks
+
+Include:
+1. Pirate Sailor.
+2. Experienced Raider.
+3. Pirate Officer.
+4. Fleet Captain.
+5. Admiral or Warlord.
+6. Faction Leader.
+
+Create powerful pirate bosses with unique names, ships, crews, flags and personalities.
+
+Defeating faction leaders should weaken their factions and potentially allow rivals to take over their territory.
+
+### Pirate difficulty
+
+Even in the late game, smaller and weaker pirate ships must continue spawning.
+
+Maintain a mixture of small boats, medium vessels, large ships, powerful flagships and rare boss fleets.
+
+Do not make every pirate encounter overwhelmingly difficult just because the player has upgraded their ship.
+
+# 8. AUTONOMOUS PIRATES AND INNOCENT SHIPS
+
+Pirates must independently find, chase, attack and rob innocent NPC ships.
+
+They should:
+- Search for vulnerable ships.
+- Demand gold and cargo.
+- Attack ships that refuse to surrender.
+- Steal valuable resources.
+- Capture survivors.
+- Retreat when badly damaged.
+- Travel in groups.
+
+Innocent ships should decide whether to surrender, escape or fight based on ship size, crew, weapons, health and morale.
+
+NPC ships must fight each other using the existing simplified combat system.
+
+The player should be able to watch, intervene, protect innocent ships, support pirates or ignore encounters.
+
+# 9. PIRATE RELATIONSHIPS AND TRADING
+
+If the player has a sufficiently negative reputation for robbing innocent ships, allow them to become friendly with pirate factions and trade with them.
+
+For example, at approximately -40 reputation or lower, many pirate factions should become more willing to interact.
+
+Allow the player to:
+- Purchase construction materials.
+- Purchase specialised materials.
+- Purchase provisions and supplies.
+- Sell stolen cargo.
+- Exchange information.
+- Join pirate fleets temporarily.
+- Help pirates attack rival factions.
+- Form temporary alliances.
+
+Different factions should offer different goods and prices.
+
+**Notorious pirates should generally stop being attacked by ordinary pirate factions while their reputation remains sufficiently negative.**
+
+If the player starts helping innocent ships and their reputation improves, pirates should gradually become suspicious and eventually hostile again.
+
+Keep individual faction relationships separate from general reputation.
+
+# 10. THE CROWN FLEET
+
+Introduce The Crown Fleet as a powerful olden-times naval faction.
+
+Give them:
+- Recognisable royal flags.
+- Distinctive sail colours.
+- Matching naval uniforms.
+- Unique decorations.
+- Different ranks of officers.
+- Several ship classes.
+
+They should patrol trade routes, protect innocent ships, respond to distress signals and actively hunt pirates.
+
+### Crown Fleet and the player
+
+**Good reputation:**
+- Treat the player as a friendly captain.
+- Protect the player's ship from pirates.
+- Offer useful information.
+- Occasionally escort the player.
+
+**Bad reputation:**
+- Become hostile.
+- Recognise the player's vessel.
+- Intercept the player.
+- Demand surrender.
+- Attack if the player refuses.
+- Send stronger fleets after notorious pirates.
+
+Neutral players should be treated cautiously.
+
+Do not reintroduce free Crown Fleet repairs, Friendly Parley rewards or Goodwill Supplies.
+
+# 11. NPC ARMADAS AND MONSTER ALLIES
+
+The Crown Fleet and powerful pirate factions should occasionally form enormous naval armadas.
+
+They should actively search for powerful enemy groups and attempt to destroy them.
+
+Include multiple flagships, escorts, supply vessels and commanders.
+
+Some particularly powerful fleets should very rarely have sea monsters fighting alongside them:
+
+- Pirate armadas may have evil monsters.
+- Crown Fleet armadas may have good monsters.
+- Important innocent convoys may occasionally have good monsters.
+- Neutral monsters remain independent.
+
+Ghost Ships are separate supernatural enemies and must remain hostile to everyone.
+
+Major NPC battles should happen independently of the player, with outcomes affecting faction strength, alliances and territory.
+
+# 12. LATE-GAME PLAYER-OWNED FLEETS AND SHIP RECRUITMENT
+
+Make building a personal fleet a major late-game achievement.
+
+The player initially focuses on their own flagship. Eventually, they can acquire and command several additional ships.
+
+## 12A. RECRUITING DEFEATED SHIPS — 50/50 SALVAGE SYSTEM
+
+**Whenever the player defeats an ordinary enemy ship, there must be exactly a 50% chance that the vessel is salvageable and a 50% chance that it is completely unsalvageable.**
+
+This decision should be made when the ship is defeated and remain permanent for that encounter.
+
+### Outcome 1 — Unsalvageable wreck (50%)
+
+The ship is too badly damaged to be repaired or recruited.
+
+It should become a wreck that the player can loot.
+
+The player can collect:
+- Gold.
+- Timber.
+- Iron.
+- Cloth.
+- Provisions.
+- Fresh water.
+- Valuable cargo.
+- Specialised materials where appropriate.
+- Surviving crew members who can be rescued or recruited.
+
+The player cannot add this vessel to their fleet.
+
+Make the wreckage look appropriately destroyed, with broken masts, damaged hull sections and floating debris.
+
+### Outcome 2 — Salvageable ship (50%)
+
+The ship remains sufficiently intact after being defeated.
+
+Display an option called:
+
+**RECRUIT SHIP**
+
+When selected:
+1. Display the ship's size and class.
+2. Show its remaining condition and surviving crew.
+3. Display an enormous recruitment and repair cost.
+4. Allow the player to confirm or cancel.
+5. Deduct the required gold.
+6. Complete repairs and commissioning.
+7. Add the ship to the player's fleet.
+
+The player should still be able to obtain appropriate loot from the encounter, but recruiting the ship must be an expensive decision.
+
+### Recruitment costs
+
+**Recruiting a ship must be EXTREMELY expensive, much more expensive than ordinary purchases or basic upgrades.**
+
+Costs should depend on:
+- Ship size.
+- Ship class.
+- Existing equipment.
+- Cannons installed.
+- Hull condition.
+- Number of remaining crew members.
+- Overall vessel value.
+
+For example:
+- Small vessels: Expensive but potentially affordable.
+- Medium vessels: Very expensive.
+- Large merchant ships: Extremely expensive.
+- Heavy warships: Enormously expensive.
+- Flagships: Among the most expensive ships to recruit.
+
+The price should be so high that recruiting ships during the early game is generally not worthwhile.
+
+It should become a realistic option once the player is wealthy and has developed their flagship.
+
+Recruited ships may have fewer crew members than originally, because sailors might have died, escaped or been rescued during battle.
+
+### Recruitment restrictions
+
+- Only ships actually defeated by the player can be recruited.
+- Innocent ships can be recruited if the player defeats them.
+- Completely destroyed ships cannot be recruited.
+- Ships that sink before recruitment cannot be recovered.
+- Sea monsters and Ghost Ships cannot be recruited.
+- Do not provide free cannons, equipment or unlimited resources when recruiting vessels.
+
+## 12B. AUTONOMOUS FLEET PROGRESSION
+
+**Fleet ships must maintain and improve themselves without requiring constant player management.**
+
+The player should mainly focus on their own flagship.
+
+Fleet ships should autonomously:
+- Gather resources through trading and missions.
+- Upgrade their hulls.
+- Increase their size.
+- Add additional decks.
+- Purchase better cannons.
+- Improve durability and storage.
+- Recruit additional crew.
+- Repair damage.
+- Restock provisions and fresh water.
+- Maintain their equipment.
+
+Their physical 3D models must visibly change when they become larger and more powerful.
+
+Use the same construction materials, upgrade tiers and equipment restrictions available to the player.
+
+Do not give fleet vessels free or exclusive upgrades.
+
+### Fleet ship maintenance
+
+Fleet ships should manage routine maintenance themselves.
+
+They should automatically use their own resources to repair damaged sections, replace damaged equipment and restock basic supplies.
+
+If they need more materials, they should acquire them through their own missions, trading and resource gathering.
+
+The player should not have to manually feed, repair or resupply every fleet vessel.
+
+### Fleet ships can sink
+
+**Player-owned fleet ships must be capable of taking damage, sinking and being permanently lost.**
+
+Do not make them invincible.
+
+They can sink due to:
+- Pirate attacks.
+- Crown Fleet attacks.
+- Sea monster attacks.
+- Ghost Ship encounters.
+- Major naval battles.
+- Severe storms.
+- Excessive accumulated damage.
+
+Their autonomous repair and maintenance systems should reduce unnecessary losses, but they must still be vulnerable to serious threats.
+
+When a fleet ship is at risk:
+- Display a warning.
+- Show its current health.
+- Allow the player to return and help defend it where possible.
+- Have the ship attempt to retreat or protect itself when heavily damaged.
+
+If it sinks, the ship and its equipment are permanently lost.
+
+This makes fleet ownership meaningful without requiring constant micromanagement.
+
+## 12C. FLEET BEHAVIOUR AND MANAGEMENT
+
+Fleet ships should:
+- Follow the player's ship.
+- Maintain formations.
+- Join battles.
+- Attack the same enemies.
+- Defend the player.
+- Protect weaker fleet vessels.
+- Return to formation.
+
+Add a dedicated FLEET tab displaying:
+- Ship names and sizes.
+- Crew numbers.
+- Health.
+- Cannons.
+- Upgrade progress.
+- Current condition.
+- Simple FOLLOW, DEFEND and HOLD POSITION commands.
+- Rename options.
+
+All fleet ships must display the player's custom flag, matching sail colours and crew branding.
+
+# 13. CREW MANAGEMENT AND EXPERIENCE
+
+Give crew members individual skills and experience.
+
+Crew members should gain experience by performing their jobs.
+
+Include:
+- Sailors.
+- Helmsmen.
+- Cannoneers.
+- Repair crew.
+- Lookouts.
+- Navigators.
+- Medical crew.
+- General crew.
+
+Experienced crew members should become more effective.
+
+Add three automatic assignment buttons:
+
+**AUTO ASSIGN — BEST ROLES**
+
+Assign crew members to the jobs that suit their skills best.
+
+**SAILING PRIORITY**
+
+Assign most crew to sailing, while retaining enough crew for steering, lookout, repairs and medical duties.
+
+**COMBAT PRIORITY**
+
+Assign most suitable crew members to cannons and combat support while retaining enough sailors and essential staff.
+
+Allow manual assignments too.
+
+Crew experience and assignments must persist between sessions.
+
+### Crew health warnings
+
+Whenever a crew member drops below 25 health, display a warning with their name and health.
+
+For example:
+
+"CREW MEMBER INJURED — JACK — 18 HEALTH"
+
+Highlight injured crew members in the crew menu.
+
+# 14. SEA MONSTERS
+
+Sea monsters should range from the size of a small boat to enormous legendary creatures.
+
+Include:
+- Small sea monsters.
+- Medium sea monsters.
+- Large sea monsters.
+- Ridiculously enormous legendary monsters.
+
+Give them detailed swimming, surfacing, diving, turning and attack animations.
+
+### Monster alignments
+
+**Good monsters:** Protect innocent ships and attack pirates. They may attack the player if they have a very negative reputation for robbing innocents.
+
+**Evil monsters:** Help pirates and attack innocent ships. They may attack players with good reputations.
+
+**Neutral monsters:** Attack pirates, the player and innocent ships depending on their behaviour.
+
+The player can attack any monster, even a friendly one, but it will fight back.
+
+### Combat and rewards
+
+Small monsters should be difficult but manageable. Larger ones should be extremely dangerous, and legendary creatures should be almost impossible to defeat.
+
+They should drop substantial provisions and potentially rare materials.
+
+### Taming
+
+Allow certain smaller monsters to be tamed by feeding them enormous quantities of food.
+
+Once tamed, they permanently follow the player's ship and attack enemies the player attacks.
+
+Save their status and health between sessions.
+
+# 15. GHOST SHIPS — SUPERNATURAL WARSHIPS
+
+**Every Ghost Ship must be awakened and hostile to everyone.**
+
+Ghost Ships attack the player, pirates, Crown Fleet, innocent ships, sea monsters and other vessels regardless of reputation.
+
+## 15A. UNNATURAL FOG
+
+Every Ghost Ship must emerge from an unnaturally large, thick cloud of supernatural fog.
+
+- Use unusual dark grey, blue or green colours.
+- Make fog clouds visible from a considerable distance.
+- Greatly reduce visibility inside them.
+- Include strange lights, silhouettes and sounds.
+- Have the ship gradually emerge rather than simply spawning visibly.
+- Keep the fog surrounding the ship as it moves.
+
+Ghost Ships must have their own unnatural fog clouds even during clear weather.
+
+## 15B. ENORMOUS SIZE VARIATIONS
+
+Ghost Ships should vary enormously in size.
+
+- Small: Approximately the size of the player's original starting boat.
+- Medium: Similar to ordinary merchant vessels.
+- Large: Bigger than most ordinary warships.
+- Enormous: Much larger than ordinary capital ships.
+- Colossal Legendary: The biggest ships in the entire game, larger than the largest sea monsters, including their entire visible bodies.
+
+The largest Ghost Ships should tower over everything else in the ocean.
+
+Do not make every Ghost Ship enormous. Most encounters should involve smaller or medium-sized vessels.
+
+## 15C. UNIQUE GHOST SHIP APPEARANCES
+
+Give them unique:
+- Unusual hull shapes.
+- Distorted masts.
+- Spectral sails.
+- Glowing windows.
+- Strange additional decks.
+- Floating structural details.
+- Supernatural decorations.
+- Glowing hull patterns.
+- Unique figureheads.
+
+Their supernatural hulls and structural designs must remain unobtainable by the player.
+
+## 15D. SPECIAL ABILITIES
+
+Include:
+- Spectral cannon volleys.
+- Temporary invisibility within their fog.
+- Supernatural explosions.
+- Summoning additional fog.
+- Spectral projectiles.
+- Powerful waves.
+- Disrupting nearby ship steering.
+- Summoning smaller supernatural creatures.
+
+Larger Ghost Ships should have more powerful abilities with cooldowns.
+
+## 15E. DIFFICULTY
+
+- Small Ghost Ships: Dangerous but defeatable.
+- Medium Ghost Ships: Difficult.
+- Large Ghost Ships: Require powerful ships and crews.
+- Enormous Ghost Ships: Exceptionally difficult.
+- Colossal Legendary Ghost Ships: Almost impossible to defeat, even with a powerful personal fleet.
+
+Fleeing should be a genuine option.
+
+## 15F. GHOST SHIP LOOT
+
+Use these potential total rewards for defeated and fully explored ships:
+
+| Size | Gold | Specialised materials |
+|---|---:|---:|
+| Small | 100–250 | 1–2 |
+| Medium | 250–700 | 2–3 |
+| Large | 700–1,800 | 3–5 |
+| Enormous | 1,500–3,500 | 4–7 |
+| Colossal Legendary | 1,800–5,000+ | 5–8 |
+
+Also include:
+- Rare valuable cargo.
+- Large quantities of provisions.
+- Rare construction materials.
+- Supernatural artefacts.
+- Special discoveries.
+- Valuable antiques and jewellery.
+
+Introduce rare collectibles such as Spectral Lanterns, Whispering Compasses, Phantom Figureheads and Ancient Ghost Relics.
+
+Unique supernatural hull designs must remain unobtainable.
+
+## 15G. SEARCHING DEFEATED GHOST SHIPS
+
+Once defeated, the ship should become a partially floating wreck that the player can explore.
+
+Give different sizes different numbers of searchable locations:
+
+- Small: 2–4 areas.
+- Medium: 4–6 areas.
+- Large: 7–10 areas.
+- Enormous: 9–12 areas.
+- Colossal Legendary: 10–14 areas.
+
+Include multiple decks, cargo holds, captain's cabins, crew quarters, weapon storage and hidden treasure rooms.
+
+Every searchable location must be searched individually.
+
+Display exploration progress:
+
+<escape>GHOST SHIP EXPLORATION
+7 / 12 AREAS SEARCHED</escape>
+
+When fully explored, display:
+
+<escape>GHOST SHIP FULLY EXPLORED
+ALL AREAS SEARCHED</escape>
+
+Save progress permanently and prevent duplicate loot collection.
+
+# 16. EXTENSIVE DYNAMIC WEATHER SYSTEM
+
+Significantly expand the weather system. Weather should create variety, atmosphere and sometimes genuine danger.
+
+Weather should change naturally throughout the world and affect the ocean, sky, visibility, sailing, ship condition and crew where appropriate.
+
+Not every weather event should damage the ship. Some should be completely harmless, while others can cause serious damage.
+
+### Weather variety
+
+Include:
+
+**Clear skies**
+- Bright sunlight.
+- Calm or moderate ocean conditions.
+- Good visibility.
+- No additional damage.
+
+**Light rain**
+- Gentle rainfall.
+- Small splashes on the deck.
+- Slightly reduced visibility.
+- No hull damage.
+
+**Heavy rain**
+- Strong rainfall.
+- Reduced visibility.
+- Wet decks.
+- More difficult navigation.
+
+**Hailstorms**
+- Hail visibly falls onto the deck and ocean.
+- Audible impacts against wood and sails.
+- Small splashes when hail hits water.
+- Usually harmless, with little or no ship damage.
+- Severe hailstorms may occasionally damage sails or exposed equipment.
+
+**Snowfall**
+- Snow visibly collecting on decks and ship surfaces.
+- Snowflakes moving naturally in the wind.
+- Cold-looking skies and reduced visibility.
+- Generally harmless to the hull.
+
+**Heavy snowstorms and blizzards**
+- Thick snowfall.
+- Very poor visibility.
+- Strong winds.
+- Difficult navigation.
+- Crew members visibly react to the cold.
+
+**Thunderstorms**
+- Heavy rainfall.
+- Lightning flashes.
+- Thunder sounds.
+- Dark clouds.
+- Stronger winds.
+- Difficult sailing.
+
+**Lightning storms**
+- Frequent lightning strikes across the ocean.
+- Large flashes lighting up the environment.
+- Lightning occasionally striking nearby ships or the water.
+- Rare direct strikes on the player's vessel.
+
+Direct strikes may cause:
+- Deck damage.
+- Mast damage.
+- Sail damage.
+- Temporary fires.
+- Equipment damage.
+
+A direct strike should not automatically destroy the entire ship.
+
+**Hurricanes and cyclones**
+- Extremely strong winds.
+- Huge waves.
+- Violent rocking.
+- Heavy rain.
+- Very poor visibility.
+- Significant difficulty controlling the ship.
+
+These should be rare and potentially devastating.
+
+**Tornadoes and waterspouts**
+- Visible rotating columns of air and water.
+- Moving across the ocean.
+- Strong winds.
+- Dangerous nearby waves.
+- Potential damage to nearby vessels.
+
+**Dense sea fog**
+- Major reduction in visibility.
+- Ships becoming difficult to spot.
+- Atmospheric and mysterious surroundings.
+- No automatic hull damage.
+
+**Heatwaves**
+- Bright sunlight.
+- Hot atmospheric appearance.
+- Faster consumption of fresh water if appropriate.
+- Generally harmless to the ship.
+
+**Strong ocean winds**
+- More powerful wind pushing the ship.
+- Increased speed when sailing in the correct direction.
+- More difficult steering against the wind.
+- Additional pressure on sails and masts.
+
+**Unusually calm seas**
+- Very little wind.
+- Small waves.
+- Slower sailing.
+- Peaceful atmosphere.
+
+### Weather damage
+
+Weather must physically interact with all ships.
+
+| Weather | Possible effects |
+|---|---|
+| Light rain | No damage |
+| Light snow | No damage |
+| Ordinary hail | Usually harmless |
+| Severe hail | Minor sail or deck damage |
+| Thunderstorm | Usually harmless, occasional lightning damage |
+| Direct lightning strike | Deck, mast or equipment damage |
+| Heavy storm | Sail, mast and hull damage |
+| Hurricane | Significant hull and structural damage |
+| Tornado | Potentially severe damage |
+| Dense fog | No physical damage |
+| Calm weather | No damage |
+
+Damage must be consistent with the actual weather event and use the existing ship damage and repair system.
+
+NPC ships should also suffer weather damage where appropriate.
+
+### Weather warnings
+
+Add warnings when dangerous weather is approaching.
+
+Examples:
+- "HEAVY STORM APPROACHING!"
+- "LIGHTNING STORM DETECTED!"
+- "DANGEROUS WINDS AHEAD!"
+- "SEVERE HAIL WARNING!"
+- "HURRICANE APPROACHING!"
+- "DENSE FOG AHEAD!"
+
+Add a HUD weather indicator showing:
+- Current weather.
+- Wind strength.
+- Ocean conditions.
+- Visibility.
+- Approaching dangers.
+
+Allow the player to open a more detailed weather screen.
+
+Forecasts should not be perfectly accurate. Unexpected weather should occasionally develop.
+
+### Weather and day/night
+
+Combine weather with the existing day and night cycle.
+
+Examples:
+- Thunderstorms at sunset create dark orange and grey skies.
+- Snowstorms have cold, pale lighting.
+- Lightning at night illuminates the ocean.
+- Hailstorms use dark clouds and occasional flashes.
+- Clear nights display stars and moonlight.
+
+Transitions must be gradual and realistic.
+
+### Weather effects on ships
+
+Merchant ships, pirate ships, Crown Fleet warships and personal fleet vessels must all respond to weather.
+
+They should:
+- Change sailing direction where appropriate.
+- Reduce speed during dangerous conditions.
+- Avoid hurricanes and tornadoes.
+- Take damage during severe storms.
+- Occasionally become disabled.
+- Repair damage using available resources.
+
+Larger ships should generally be more stable, while smaller boats should be more affected by waves and wind.
+
+Storms should also affect NPC battles.
+
+### Weather frequency
+
+- Clear weather and light rain should be common.
+- Fog, hail, snow and thunderstorms should occur occasionally.
+- Heavy storms should be less common.
+- Hurricanes and tornadoes should be rare.
+- Particularly severe combinations should be exceptionally rare.
+
+Do not constantly generate dangerous weather.
+
+# 17. ADMIN MODE FOR TESTING
+
+Add a hidden admin mode.
+
+Press P to open an admin password menu.
+
+The password is:
+
+`rgb`
+
+When the correct code is entered, activate admin mode.
+
+### Admin rewards
+
+Automatically provide:
+- Maximum gold.
+- Maximum basic and specialised materials.
+- Maximum provisions and fresh water.
+- Every available cannon.
+- Every available ship upgrade.
+- Maximum hull expansions and armour.
+- Maximum crew capacity.
+- Fully experienced crew.
+- All flag designs and dyes.
+- A fully upgraded flagship.
+- A huge personal fleet of powerful ships.
+- Fully upgraded fleet vessels.
+- The largest and most powerful sea monster as a permanent companion.
+
+### Admin testing menu
+
+Press P again to open the admin menu.
+
+Include:
+
+**1. Teleport to powerful fleets**
+
+Display the largest Crown Fleet armadas, pirate armadas, pirate boss fleets and fleets involved in enormous battles.
+
+Also include large and colossal Ghost Ships.
+
+Allow safe teleportation near selected groups.
+
+**2. Admin resources**
+
+Restore maximum gold and materials, provisions and water.
+
+**3. Fleet testing**
+
+Spawn or restore the maximum upgraded personal fleet.
+
+**4. Monster testing**
+
+Spawn or restore the largest monster companion.
+
+**5. Ghost Ship testing**
+
+Spawn different Ghost Ship sizes, including colossal Legendary Ghost Ships.
+
+**6. Weather testing**
+
+Allow the player to activate specific weather conditions, including hailstorms, snowstorms, lightning storms, hurricanes and tornadoes.
+
+**7. Admin mode toggle**
+
+Disable or re-enable admin mode.
+
+Admin mode must not accidentally activate during normal gameplay. Keep normal progression, saves and permadeath independent of admin testing.
+
+# 18. REMOVE WEAPON COMPONENTS COMPLETELY
+
+**Completely remove the Weapon Components resource/item from the entire game.**
+
+Remove it from:
+- Player inventory.
+- Merchant inventories.
+- Pirate trading inventories.
+- Shipwreck loot tables.
+- Resource collection.
+- Ship upgrade requirements.
+- Cannon installation requirements.
+- Weapon upgrade requirements.
+- Repair requirements.
+- Resource HUD and menus.
+- Crafting and construction systems.
+
+Remove all references to Weapon Components from gameplay and the user interface.
+
+### Simplified cannon purchasing
+
+Cannons should be purchasable using:
+- Gold.
+- Iron.
+- A small amount of timber where appropriate.
+- Specialised materials for expensive late-game cannons.
+
+Basic cannons should be affordable.
+
+More powerful cannons should become progressively more expensive.
+
+Mounting a cannon must never require Weapon Components or an equivalent generic weapon-part item.
+
+The player should simply purchase the cannon, pay the required gold and materials, and install it in an available cannon position.
+
+Do not replace Weapon Components with another unnecessary generic weapon-mounting resource.
+
+# 19. TIME OF DAY AND SKY APPEARANCE
+
+Make the sky change depending on the time of day.
+
+- **Sunrise:** Pink, orange and golden colours.
+- **Morning:** Light blue sky and soft natural sunlight.
+- **Midday:** Bright blue sky and strong sunlight.
+- **Sunset:** Orange, red, pink and purple colours.
+- **Night:** Dark blue and black sky, visible stars and moonlight.
+
+Clouds, fog, rain, snow, hail and storms should affect the sky's appearance.
+
+Transitions must be gradual and realistic, with lighting and ocean reflections changing alongside the sky.
+
+# 20. CUSTOM SHIP FLAGS AND DESIGNS
+
+Add a fully functional flag customisation system.
+
+Allow the player to customise:
+- Background colour.
+- Flag pattern.
+- Main emblem or symbol.
+- Decorative details.
+- Colour combinations.
+- Available flag shapes and styles.
+
+Provide a simple editor with a live preview.
+
+Allow players to find or purchase dyes including red, blue, green, yellow, black, white, purple and orange.
+
+Add rare special dyes and designs found in shipwrecks or purchased from specialised merchants.
+
+Include skulls, sea creatures, crossed weapons, royal symbols, ancient symbols, pirate patterns and legendary decorative emblems.
+
+The flag must physically appear on the ship, wave naturally with the wind and be visible from a distance.
+
+Save unlocked designs and dyes between sessions.
+
+NPCs should recognise the player's ship and flag.
+
+# 21. SHIP CONSTRUCTION, CANNONS AND PROGRESSION
+
+Create a much larger ship construction and upgrade system.
+
+### Basic materials
+
+The main early-game resources should be:
+
+1. **Timber:** Basic hull construction and structural improvements.
+2. **Iron:** Basic reinforcement and structural improvements.
+3. **Cloth:** Sails and basic ship additions.
+4. **Gold:** Purchasing upgrades, equipment and supplies.
+
+### Advanced materials
+
+Keep specialised materials for expensive late-game improvements, including advanced timber, reinforced metals, specialised sailcloth, rare construction materials and advanced weapon components.
+
+These should be used for enormous ships, heavy armour, advanced cannons and specialised equipment.
+
+### Separate ship upgrade tabs
+
+Create two dedicated ship management tabs:
+
+**TAB 1 — CANNONS AND WEAPONS**
+
+Contains every cannon purchase, cannon upgrade and weapon-related improvement.
+
+**TAB 2 — HULL AND STRUCTURE**
+
+Contains hull expansion, hull reinforcement, additional decks, ship size and structural improvements.
+
+### Buying cannons
+
+Cannons must be purchased using gold and required construction materials.
+
+Include:
+- Light cannons.
+- Medium cannons.
+- Heavy cannons.
+- Long guns.
+- Carronades.
+- Swivel guns.
+- Advanced heavy cannons.
+- Specialised cannons.
+
+Each has its own damage, range, accuracy, reload speed, weight, crew requirements, purchase price and material requirements.
+
+Basic cannons require modest gold and iron, with a little timber where appropriate.
+
+Powerful cannons should require substantially more gold and specialised materials.
+
+Cannons must physically appear on the ship when installed.
+
+Crew assignments should affect reload speed and effectiveness.
+
+### Hull upgrades
+
+Include basic, medium, advanced and late-game hull upgrades.
+
+Late-game upgrades should include:
+- Enormous hull expansions.
+- Extremely heavy reinforcement.
+- Advanced multi-layer hull construction.
+- Multiple additional decks.
+- Major width and length expansions.
+- Exceptional cargo and crew capacity.
+- Specialised defensive construction.
+
+Late-game upgrades should be extremely expensive, requiring substantial gold, timber, iron and specialised materials.
+
+### Physical upgrades
+
+Upgrades must visibly change the ship's 3D model.
+
+Length upgrades should extend the hull, width upgrades should widen it, additional decks should physically appear and reinforcement should visibly change the ship.
+
+Larger vessels should be heavier, slower to turn and stop, but generally more stable in waves.
+
+# 22. PROVISIONS, FRESH WATER AND AUTOMATIC DISTRIBUTION
+
+Crew members must automatically receive provisions and fresh water from ship storage.
+
+The player should never need to manually distribute food or water.
+
+- Every crew member consumes provisions over time.
+- Every crew member consumes fresh water over time.
+- Larger crews require more supplies.
+- Supplies are automatically deducted from storage.
+
+Provisions and water are survival supplies, not construction materials.
+
+### Supply warnings
+
+Add clear HUD warnings:
+- "WARNING: PROVISIONS RUNNING LOW!"
+- "WARNING: FRESH WATER RUNNING LOW!"
+- "SUPPLY EMPTY: CREW IS NO LONGER RECEIVING PROVISIONS!"
+- "WATER DEPLETED: CREW IS NO LONGER RECEIVING FRESH WATER!"
+
+When supplies run out, notify the player and gradually reduce crew health or morale if shortages continue.
+
+Allow warnings to be dismissed while keeping supply indicators visible.
+
+Fishing trawlers must exclusively sell provisions and fresh water.
+
+Display how many days of supplies remain based on crew size and consumption.
+
+# 23. REALISTIC SHIP DAMAGE AND MANUAL REPAIRS
+
+Ship damage must remain until manually repaired.
+
+Whenever a cannonball hits a ship, record:
+- Where it was hit.
+- How much damage was dealt.
+- Whether it was a critical hit.
+- The severity of the damage.
+
+Apply this to player and NPC ships.
+
+### Hit notifications
+
+Display:
+- "CRITICAL HIT — ENEMY HULL — 65 DAMAGE"
+- "PLAYER SHIP HIT — DECK — 28 DAMAGE"
+
+Show damage amount, hit location and whether it was critical.
+
+Do not include gold in damage calculations or notifications.
+
+### Visual damage
+
+Include visible hull holes, broken planks, splintered wood, damaged sails and smoke around damaged sections.
+
+Weather damage must also use this system.
+
+### Manual repairs
+
+**Repairs must NOT happen automatically on the player's main ship.**
+
+The player must manually select damaged sections through ship management.
+
+Basic repairs:
+- Hull: Timber and a little iron.
+- Deck: Timber.
+- Mast: Timber.
+- Sails: Cloth.
+- Cannons: Iron.
+
+Advanced late-game repairs may require specialised materials.
+
+When a repair is selected:
+1. Deduct the required materials.
+2. Start a short repair timer.
+3. Have crew members visibly work on the damaged section.
+4. Restore its condition when finished.
+
+Small repairs should take less time than large repairs.
+
+Allow the player to choose which sections to repair first.
+
+NPC ships should also repair themselves where appropriate.
+
+# 24. SAVING AND PERFORMANCE
+
+Save all new information between game sessions, including:
+- Reputation and faction relationships.
+- Pirate factions and defeated bosses.
+- Fleet ships and their progress.
+- Crew roles, skills, health and assignments.
+- Ship damage and repair progress.
+- Weather-related damage.
+- Ghost Ship discoveries and defeat status.
+- Ghost Ship exploration progress.
+- Tamed sea monsters.
+- Current ship configuration.
+- Cannons and hull upgrades.
+- Custom flag and unlocked designs.
+- Gold and materials.
+- Provisions and fresh water.
+- Journal entries.
+- Current voyage position and world state.
+
+**Back up the player's current voyage immediately rather than using an outdated 30-second snapshot.**
+
+Autosaves should capture the latest completed game state.
+
+Keep permadeath rules intact. A backup must never undo an actual in-game death.
+
+Optimise distant ships, fleets, battles, weather and monster simulations using efficient world streaming.
+
+Do not sacrifice visual detail unnecessarily.
+
+# 25. FINAL REQUIREMENTS
+
+The goal is to make Oceanbound feel like a living, detailed olden-times sailing world.
+
+The player should be able to peacefully explore and trade, become a notorious pirate, rescue innocent ships, join pirate conflicts, defeat powerful faction leaders or build an enormous trading vessel.
+
+Pirates must attack innocent NPC ships independently. Different factions must have their own relationships, fleets, captains and leaders.
+
+The Crown Fleet and powerful pirate factions should occasionally form enormous armadas that hunt each other.
+
+Ghost Ships must be awakened, hostile to everyone, surrounded by enormous unnatural fog clouds, and range from starter-boat size to colossal vessels larger than the biggest sea monsters.
+
+Sea monsters should range from small tameable creatures to enormous legendary beasts with different alignments and behaviours.
+
+Weather should include harmless snowfall and hail as well as dangerous lightning storms, hurricanes, tornadoes, heavy rain and powerful winds.
+
+The player should be able to customise their ship's flag, recruit and manage fleets, use different cannons and build enormous late-game hulls.
+
+Crew must automatically receive provisions and water, with warnings when supplies run low or become depleted. Shipwreck injuries and starvation must genuinely affect crew health.
+
+Every defeated ordinary enemy ship must have an independent 50% chance of being unsalvageable and a 50% chance of being recruitable. Recruiting must cost enormous amounts of gold, particularly for large and powerful vessels.
+
+Personal fleet vessels must be capable of sinking permanently, but should autonomously maintain themselves, gather resources, repair damage and restock supplies so the player does not have to constantly manage them.
+
+All conventional ship upgrades used by NPCs must eventually be obtainable by the player. Ghost Ships remain the exception for their supernatural designs.
+
+Admin mode must retain the password `rgb` and provide maximum resources, upgrades, a large fleet, the largest monster companion, Ghost Ship testing, weather testing and teleportation to powerful fleets.
+
+**The main progression goal is to start with a tiny wooden boat and eventually build an enormous, heavily armed and reinforced flagship with a capable crew and an entire fleet of independently maintained sailing ships.**
+
+Keep the simplified naval combat system. The only special combat option should be SURRENDER, with escaping handled manually through sailing.
+
+**Do not remove unrelated existing features. Test every change carefully. All systems must be genuinely functional rather than visual placeholders.**
