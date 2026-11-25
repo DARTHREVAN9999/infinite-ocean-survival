@@ -478,6 +478,33 @@ export function stepFleetAutonomy(
   return { ship: next, upgraded, upgradeSummary, supplyGift };
 }
 
+export function computeExactFleetMotion(
+  ship: FleetShipData,
+  playerSpeed: number,
+  playerThrottle: number,
+  goalDist: number,
+  engagedInCombat: boolean
+): number {
+  if (ship.command === 'hold' || ship.sunk || ship.hull <= 0) {
+    return 0;
+  }
+  const flagshipSpeed = Math.abs(playerSpeed);
+  if (engagedInCombat) {
+    return Math.max(ship.maxSpeed, flagshipSpeed);
+  }
+  // Exact match to flagship throttle/speed when near formation slot; mild catch-up if lagging behind
+  if (goalDist > 34) {
+    return Math.max(flagshipSpeed * 1.15, flagshipSpeed + 1.8);
+  }
+  if (goalDist > 16) {
+    return Math.max(flagshipSpeed * 1.05, flagshipSpeed + 0.45);
+  }
+  if (Math.abs(playerThrottle) < 0.04 && flagshipSpeed < 0.35) {
+    return 0;
+  }
+  return flagshipSpeed;
+}
+
 export function steerFleetShipHeading(
   ship: FleetShipData,
   targetHeading: number,
@@ -485,9 +512,9 @@ export function steerFleetShipHeading(
   dt: number
 ): { heading: number; speed: number; x: number; z: number } {
   const diff = normalizeAngle(targetHeading - ship.heading);
-  const maxTurn = ship.turnRate * dt;
+  const maxTurn = Math.max(ship.turnRate, 0.95) * dt;
   const heading = normalizeAngle(ship.heading + clamp(diff, -maxTurn, maxTurn));
-  const speed = ship.speed + (desiredSpeed - ship.speed) * clamp(dt * 1.8, 0, 1);
+  const speed = ship.speed + (desiredSpeed - ship.speed) * clamp(dt * 3.6, 0, 1);
   const x = ship.x - Math.sin(heading) * speed * dt;
   const z = ship.z - Math.cos(heading) * speed * dt;
   return { heading, speed, x, z };

@@ -90,66 +90,80 @@ export const PirateHailModal: React.FC<PirateHailModalProps> = ({
 interface CombatCommandBarProps {
   hud: HudSnapshot;
   onSetCommand: (cmd: CombatCommand) => void;
+  onSelectTarget?: (enemyId: string) => void;
 }
 
 export const CombatCommandBar: React.FC<CombatCommandBarProps> = ({
   hud,
   onSetCommand,
+  onSelectTarget,
 }) => {
   const [confirmSurrender, setConfirmSurrender] = useState(false);
 
-  const enemy = hud.activeEnemy;
-  if (!hud.combat.active || !enemy) return null;
+  const enemies =
+    hud.activeEnemies && hud.activeEnemies.length > 0
+      ? hud.activeEnemies
+      : hud.activeEnemy
+        ? [
+            {
+              ...hud.activeEnemy,
+              id: hud.combat.primaryTargetId || 'primary',
+              isPrimary: true,
+              behaviorLabel: undefined,
+              intelligenceLabel: undefined,
+            },
+          ]
+        : [];
+
+  const primaryEnemy = enemies.find((e) => e.isPrimary) ?? enemies[0];
+  if (!hud.combat.active || !primaryEnemy) return null;
 
   const spec = WEAPON_SPECS[hud.upgrades.weaponType];
-  const dist = Math.round(enemy.distance ?? 0);
-  const inRange = hud.upgrades.cannonCount > 0 && dist <= spec.range;
+  const primaryDist = Math.round(primaryEnemy.distance ?? 0);
+  const inRange = hud.upgrades.cannonCount > 0 && primaryDist <= spec.range;
   const playerHullPct = Math.max(0, Math.min(100, Math.round(hud.condition.hull)));
-  const enemyHullPct = Math.max(
-    0,
-    Math.min(100, Math.round((enemy.hull / Math.max(1, enemy.maxHull)) * 100))
-  );
   const reloadPct = Math.max(0, Math.min(100, Math.round(hud.combat.playerReload * 100)));
 
-  const canSurrender = enemy.kind !== 'monster' && !hud.activePirate?.isGhost;
+  const canSurrender = primaryEnemy.kind !== 'monster' && !hud.activePirate?.isGhost;
   const pirateGoldTribute = Math.round(hud.gold * 0.35);
   const pirateFoodTribute = Math.round(hud.food * 0.25);
   const restitutionCost = Math.round(hud.gold * 0.4);
+  const allies = hud.assistingAllies ?? [];
 
   return (
     <div
       data-testid="combat-command-bar"
-      className="fixed bottom-3 left-1/2 -translate-x-1/2 z-20 w-[min(820px,96vw)] nautical-panel rounded-lg p-4 pointer-events-auto space-y-3"
+      className="fixed bottom-3 left-1/2 -translate-x-1/2 z-20 w-[min(880px,96vw)] nautical-panel rounded-lg p-3.5 sm:p-4 pointer-events-auto space-y-2.5"
     >
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pb-2.5 border-b border-[#c99d4e]/25">
-        {/* Player Ship Status */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-sm">
+      {/* Top Bar: Your Vessel + Optional Assisting Allies */}
+      <div className="space-y-1.5 pb-2 border-b border-[#c99d4e]/25">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+          <div className="flex items-center gap-3">
             <span className="font-bold text-[#f7efe0]">Your Vessel</span>
-            <span className="font-mono-num text-[#d6cbb6]">
+            <span className="font-mono-num text-xs text-[#d6cbb6]">
               Hull <strong className="text-[#f7efe0]">{playerHullPct}%</strong> · Crew{' '}
               <strong className="text-[#f7efe0]">{hud.crewCount}</strong>
             </span>
           </div>
-          <div className="h-2.5 w-full bg-[#1a2633] rounded-sm overflow-hidden">
-            <div
-              className="h-full"
-              style={{
-                width: `${playerHullPct}%`,
-                backgroundColor:
-                  playerHullPct > 60 ? '#4e9f76' : playerHullPct > 30 ? '#d89b3c' : '#c4463c',
-              }}
-            />
-          </div>
-          <div className="flex items-center justify-between gap-2 text-xs text-[#b8ac95]">
+
+          <div className="flex items-center gap-3 text-xs text-[#b8ac95]">
+            {allies.length > 0 && (
+              <span
+                data-testid="assisting-allies-label"
+                className="font-semibold text-[#7ac59b]"
+              >
+                Allies Assisting: {allies.slice(0, 2).join(', ')}
+                {allies.length > 2 ? ` +${allies.length - 2}` : ''}
+              </span>
+            )}
             <span>
               {hud.upgrades.cannonCount === 0
                 ? 'No Cannons Mounted'
                 : !inRange
-                  ? `Closing Range (${dist}m / ${spec.range}m)`
+                  ? `Closing Range (${primaryDist}m / ${spec.range}m)`
                   : `Auto-Cannons (${hud.upgrades.cannonCount})`}
             </span>
-            <div className="flex items-center gap-2 min-w-[125px]">
+            <div className="flex items-center gap-1.5 min-w-[105px]">
               <div className="flex-1 h-2 bg-[#1a2633] rounded-sm overflow-hidden">
                 <div className="h-full bg-[#c99d4e]" style={{ width: `${reloadPct}%` }} />
               </div>
@@ -159,36 +173,87 @@ export const CombatCommandBar: React.FC<CombatCommandBarProps> = ({
             </div>
           </div>
         </div>
-
-        {/* Enemy Status */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-sm">
-            <div className="min-w-0 truncate">
-              <strong className="font-display text-[#f7efe0]">{enemy.name}</strong>
-              <span className="ml-2 text-xs uppercase tracking-wide text-[#f1887c] font-semibold">
-                {enemy.subtitle}
-              </span>
-            </div>
-            <span className="font-mono-num text-[#d6cbb6] shrink-0">
-              {Math.round(enemy.hull)}/{enemy.maxHull}
-              {enemy.crewCount > 0 ? ` · Crew ${enemy.crewCount}` : ''}
-            </span>
-          </div>
-          <div className="h-2.5 w-full bg-[#1a2633] rounded-sm overflow-hidden">
-            <div className="h-full bg-[#c4463c]" style={{ width: `${enemyHullPct}%` }} />
-          </div>
-          <div className="flex items-center justify-between text-xs text-[#b8ac95] font-mono-num">
-            <span>Distance {dist}m · Sail past 265m to break off</span>
-            <span className="uppercase">{enemy.kind}</span>
-          </div>
+        <div className="h-2 w-full bg-[#1a2633] rounded-sm overflow-hidden">
+          <div
+            className="h-full transition-all duration-150"
+            style={{
+              width: `${playerHullPct}%`,
+              backgroundColor:
+                playerHullPct > 60 ? '#4e9f76' : playerHullPct > 30 ? '#d89b3c' : '#c4463c',
+            }}
+          />
         </div>
+      </div>
+
+      {/* Hostile Vessels Health Bars (1..4 simultaneously, clickable to switch focus) */}
+      <div
+        data-testid="enemy-health-grid"
+        className={`grid gap-2 max-h-[168px] overflow-y-auto nautical-scroll pr-0.5 ${
+          enemies.length > 1 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'
+        }`}
+      >
+        {enemies.map((en) => {
+          const enemyHullPct = Math.max(
+            0,
+            Math.min(100, Math.round((en.hull / Math.max(1, en.maxHull)) * 100))
+          );
+          const dist = Math.round(en.distance ?? 0);
+          return (
+            <button
+              key={en.id}
+              type="button"
+              data-testid="enemy-health-card"
+              aria-pressed={en.isPrimary}
+              onClick={() => onSelectTarget?.(en.id)}
+              className={`text-left rounded px-3 py-2 border transition-colors cursor-pointer space-y-1 ${
+                en.isPrimary
+                  ? 'bg-[#1a1618] border-[#e05a4d]/80'
+                  : 'bg-[#101822] hover:bg-[#172330] border-[#c99d4e]/25'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <div className="min-w-0 truncate">
+                  <strong className="font-display text-sm text-[#f7efe0]">{en.name}</strong>
+                  <span className="ml-2 uppercase tracking-wide text-[11px] text-[#f1887c] font-semibold">
+                    {en.subtitle}
+                  </span>
+                </div>
+                <span className="font-mono-num text-[#d6cbb6] shrink-0 font-bold">
+                  {Math.round(en.hull)}/{en.maxHull}
+                </span>
+              </div>
+
+              <div className="h-2 w-full bg-[#1a2633] rounded-sm overflow-hidden">
+                <div
+                  className="h-full transition-all duration-150"
+                  style={{
+                    width: `${enemyHullPct}%`,
+                    backgroundColor: en.isPrimary ? '#d6453a' : '#a83c34',
+                  }}
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-2 text-[11px] text-[#b8ac95] font-mono-num">
+                <span className="truncate">
+                  {dist}m{en.crewCount > 0 ? ` · Crew ${en.crewCount}` : ''}
+                  {en.behaviorLabel ? ` · ${en.behaviorLabel}` : ''}
+                </span>
+                <span className="uppercase shrink-0 text-[#d8ae5e]">
+                  {en.isPrimary && enemies.length > 1
+                    ? 'TARGET'
+                    : en.intelligenceLabel || en.kind}
+                </span>
+              </div>
+            </button>
+          );
+        })}
       </div>
 
       {/* Confirm Surrender Inline Bar */}
       {confirmSurrender && canSurrender ? (
         <div className="p-3 rounded bg-[#341a1a] border border-[#e05a4d]/60 flex flex-wrap items-center justify-between gap-3">
           <div className="text-xs text-[#f7d8d4]">
-            {enemy.kind === 'pirate' ? (
+            {primaryEnemy.kind === 'pirate' ? (
               <>
                 Strike colors and yield{' '}
                 <strong className="text-[#efc570] font-mono-num">{pirateGoldTribute}g</strong> +{' '}
@@ -229,11 +294,13 @@ export const CombatCommandBar: React.FC<CombatCommandBarProps> = ({
               setConfirmSurrender(false);
               onSetCommand('attack');
             }}
-            className="px-4 py-2.5 rounded text-left cursor-pointer transition-colors border bg-[#c99d4e] border-[#efc570] text-[#14100b]"
+            className="px-4 py-2 rounded text-left cursor-pointer transition-colors border bg-[#c99d4e] border-[#efc570] text-[#14100b]"
           >
             <div className="text-sm font-bold leading-tight">Attack — Broadside Engaged</div>
             <div className="text-xs mt-0.5 leading-tight text-[#2b2011]">
-              Auto-fire at nearest foe · Steer manually with WASD
+              {enemies.length > 1
+                ? `Focusing ${primaryEnemy.name} · Click another enemy bar to switch`
+                : 'Auto-fire at foe · Steer manually with WASD'}
             </div>
           </button>
 
@@ -241,7 +308,7 @@ export const CombatCommandBar: React.FC<CombatCommandBarProps> = ({
             type="button"
             disabled={!canSurrender}
             onClick={() => setConfirmSurrender(true)}
-            className={`px-4 py-2.5 rounded text-left border transition-colors ${
+            className={`px-4 py-2 rounded text-left border transition-colors ${
               canSurrender
                 ? 'bg-[#361b1b] hover:bg-[#492525] border-[#c4463c]/55 text-[#f5c7c2] cursor-pointer'
                 : 'bg-[#1a222b] border-[#c99d4e]/20 text-[#7d868f] cursor-not-allowed'

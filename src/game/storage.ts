@@ -97,6 +97,7 @@ export function createNewVoyage(
         crowsNest: false,
         medicalBay: false,
         repairStation: false,
+        fishingGear: 'none',
         weaponType: 'swivel',
         cannonCount: 1,
         cannonUpgrades: {
@@ -117,6 +118,7 @@ export function createNewVoyage(
       },
       repairPriority: 'hull',
       crew: createStartingCrew(rand),
+      damageMarks: [],
     },
     fleet: [],
     weather: initialWeather,
@@ -127,6 +129,11 @@ export function createNewVoyage(
     unlockedEmblems: ['none', 'anchor', 'skull'],
     unlockedPatterns: ['solid', 'horizontal_bicolor', 'vertical_bicolor', 'saltire', 'chevron', 'bordered'],
     ghostCollectibles: [],
+    treasureFragments: 0,
+    treasureMaps: [],
+    discoveredIslandIds: ['island_starter_coral_haven'],
+    collectedDiscoveryIds: [],
+    completedErrandIds: [],
     journal: initialJournal,
     exploredCells: ['0,0'],
     markers: [],
@@ -199,7 +206,7 @@ export function loadVoyageFromStorage(): SaveData | null {
     const merged: SaveData = {
       ...base,
       ...parsed,
-      version: 3,
+      version: 4,
       reputation: typeof parsed.reputation === 'number' ? parsed.reputation : 0,
       player: {
         ...base.player,
@@ -212,6 +219,7 @@ export function loadVoyageFromStorage(): SaveData | null {
         upgrades: {
           ...base.player.upgrades,
           ...(parsed.player.upgrades || {}),
+          fishingGear: parsed.player.upgrades?.fishingGear || 'none',
           cannonUpgrades: {
             ...base.player.upgrades.cannonUpgrades,
             ...(parsed.player.upgrades?.cannonUpgrades || {}),
@@ -223,7 +231,12 @@ export function loadVoyageFromStorage(): SaveData | null {
           forced: Boolean(c.forced),
           xp: typeof c.xp === 'number' ? c.xp : 0,
           level: typeof c.level === 'number' ? c.level : 1,
+          skills: {
+            ...c.skills,
+            fishing: typeof c.skills?.fishing === 'number' ? c.skills.fishing : Math.max(2, Math.floor((c.skills?.sailing ?? 3) * 0.85)),
+          },
         })),
+        damageMarks: Array.isArray(parsed.player.damageMarks) ? parsed.player.damageMarks : [],
       },
       fleet: Array.isArray(parsed.fleet) ? parsed.fleet.filter((f) => !f.sunk && f.hull > 0) : [],
       weather: normalizedWeather,
@@ -241,6 +254,13 @@ export function loadVoyageFromStorage(): SaveData | null {
       unlockedEmblems: parsed.unlockedEmblems || base.unlockedEmblems,
       unlockedPatterns: parsed.unlockedPatterns || base.unlockedPatterns,
       ghostCollectibles: Array.isArray(parsed.ghostCollectibles) ? parsed.ghostCollectibles : [],
+      treasureFragments: typeof parsed.treasureFragments === 'number' ? parsed.treasureFragments : 0,
+      treasureMaps: Array.isArray(parsed.treasureMaps) ? parsed.treasureMaps : [],
+      discoveredIslandIds: Array.isArray(parsed.discoveredIslandIds)
+        ? parsed.discoveredIslandIds
+        : base.discoveredIslandIds,
+      collectedDiscoveryIds: Array.isArray(parsed.collectedDiscoveryIds) ? parsed.collectedDiscoveryIds : [],
+      completedErrandIds: Array.isArray(parsed.completedErrandIds) ? parsed.completedErrandIds : [],
       defeatedBossIds: parsed.defeatedBossIds || [],
       defeatedMonsterIds: parsed.defeatedMonsterIds || [],
       tamedMonsters: parsed.tamedMonsters || [],

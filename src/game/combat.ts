@@ -1,12 +1,15 @@
 import {
+  AiIntelligenceTier,
   CombatCommand,
   CombatTarget,
   CrewMember,
   FireMode,
   GhostSizeTier,
   Inventory,
+  MerchantShipData,
   PirateDemand,
   PirateFactionId,
+  PirateFactionState,
   PirateRank,
   PirateShipData,
   PirateTier,
@@ -14,12 +17,19 @@ import {
   ShipCondition,
   ShipUpgrades,
   VesselClass,
+  VesselTemperament,
   WreckSurvivor,
 } from './types';
 import { getEffectiveWeaponStats } from './economy';
 import { clamp, normalizeAngle } from './waveMath';
 import { createRandomCrewMember } from './survival';
-import { PIRATE_FACTIONS, PIRATE_FACTION_IDS, PIRATE_RANK_TITLES } from './factions';
+import {
+  isPirateAlliedWithPlayer,
+  isPlayerPirateAligned,
+  PIRATE_FACTIONS,
+  PIRATE_FACTION_IDS,
+  PIRATE_RANK_TITLES,
+} from './factions';
 
 const PIRATE_NAMES: Record<PirateTier, string[]> = {
   sloop: ['The Sea Viper', 'Black Gull', 'Ragged Crow', 'Salt Fang', 'Cutthroat Kestrel'],
@@ -232,6 +242,20 @@ export function generatePirateShip(
     options.customCaptain ??
     (rank === 6 ? factionMeta.leaderName : CAPTAIN_NAMES[Math.floor(rand() * CAPTAIN_NAMES.length)]);
 
+  const aiIntelligence: AiIntelligenceTier = isBoss || rank >= 5
+    ? 'veteran'
+    : tier === 'galleon' || tier === 'dreadnought' || rank >= 3
+      ? rand() < 0.35
+        ? 'veteran'
+        : 'tactical'
+      : tier === 'brigantine'
+        ? rand() < 0.32
+          ? 'basic'
+          : 'tactical'
+        : rand() < 0.68
+          ? 'basic'
+          : 'tactical';
+
   return {
     id,
     name: shipName,
@@ -246,6 +270,9 @@ export function generatePirateShip(
     escortTargetId: options.escortTargetId,
     hullArchetype,
     personality: factionMeta.personality,
+    aiIntelligence,
+    ramCooldown: 6 + rand() * 8,
+    ramCommitTimer: 0,
     tier,
     x,
     z,
@@ -374,6 +401,7 @@ export function generateGhostShip(
     ...base,
     isGhost: true,
     ghostSize,
+    aiIntelligence: ghostSize === 'small' ? 'tactical' : 'veteran',
     ghostAbilityTimer: 4 + rand() * 5,
     ghostStealthTimer: 0,
     ghostCollectible: GHOST_RELIC_NAMES[Math.floor(rand() * GHOST_RELIC_NAMES.length)],
@@ -703,8 +731,34 @@ export interface CollisionResolution {
   pushBx: number;
   pushBz: number;
   impactSpeed: number;
+  angleFactor: number;
+  isLightScrape: boolean;
+  hitSectionA: RepairPriority;
+  hitSectionB: RepairPriority;
   damageA: number;
   damageB: number;
+  knockbackSpeedA: number;
+  knockbackSpeedB: number;
+}
+
+export interface CollisionOptions {
+  aHeading?: number;
+  bHeading?: number;
+}
+
+function classifyHitSectionOnShip(
+  shipHeading: number,
+  dirToOtherX: number,
+  dirToOtherZ: number,
+  impactSeverity: number
+): RepairPriority {
+  const fwdX = -Math.sin(shipHeading);
+  const fwdZ = -Math.cos(shipHeading);
+  const bowAlign = fwdX * dirToOtherX + fwdZ * dirToOtherZ; // +1 bow, -1 stern, ~0 broadside
+  if (bowAlign < -0.55) return 'steering';
+  if (bowAlign > 0.58) return 'hull';
+  if (impactSeverity >= 1.25) return 'cannons';
+  return 'hull';
 }
 
 export function resolveShipCollision(
@@ -721,7 +775,8 @@ export function resolveShipCollision(
   bVz: number,
   bRadius: number,
   bMass: number,
-  bMitigation = 1.0
+  bMitigation = 1.0,
+  options?: CollisionOptions
 ): CollisionResolution {
   const dx = ax - bx;
   const dz = az - bz;
@@ -738,14 +793,21 @@ export function resolveShipCollision(
       pushBx: 0,
       pushBz: 0,
       impactSpeed: 0,
+      angleFactor: 0,
+      isLightScrape: false,
+      hitSectionA: 'hull',
+      hitSectionB: 'hull',
       damageA: 0,
       damageB: 0,
+      knockbackSpeedA: 0,
+      knockbackSpeedB: 0,
     };
   }
 
+  // Normal pointing from B toward A
   const nx = dist > 0.001 ? dx / dist : 0;
   const nz = dist > 0.001 ? dz / dist : 1;
-  const overlap = minDist - dist + 0.35;
+  const overlap = minDist - dist + 0.42;
 
   const totalMass = Math.max(0.01, aMass + bMass);
   const shareA = bMass >= 999 ? 1 : bMass / totalMass;
@@ -756,15 +818,88 @@ export function resolveShipCollision(
   const relNormal = rvx * nx + rvz * nz;
   const impactSpeed = Math.max(0, -relNormal);
 
+  const spdA = Math.hypot(aVx, aVz);
+  const spdB = Math.hypot(bVx, bVz);
+  const relTotal = Math.hypot(rvx, rvz);
+
+  // Directness factor: 1.0 head-on along contact normal vs ~0.15 oblique grazing scrape
+  const directness = relTotal > 0.25 ? clamp(impactSpeed / relTotal, 0.15, 1.0) : 0.3;
+
+  const aHead =
+    options?.aHeading !== undefined
+      ? options.aHeading
+      : spdA > 0.25
+        ? Math.atan2(-aVx, -aVz)
+        : Math.atan2(nx, nz);
+  const bHead =
+    options?.bHeading !== undefined
+      ? options.bHeading
+      : spdB > 0.25
+        ? Math.atan2(-bVx, -bVz)
+        : Math.atan2(-nx, -nz);
+
+  // Check if A or B struck bow-first vs glancing side-by-side
+  const aBowHit = clamp((-Math.sin(aHead) * -nx + -Math.cos(aHead) * -nz), 0, 1);
+  const bBowHit = clamp((-Math.sin(bHead) * nx + -Math.cos(bHead) * nz), 0, 1);
+  const angleFactor = clamp(directness * (0.65 + Math.max(aBowHit, bBowHit) * 0.68), 0.18, 1.45);
+
+  const isLightScrape =
+    impactSpeed < 1.85 || (impactSpeed <= 3.15 && directness < 0.56);
+
+  const hitSectionA = classifyHitSectionOnShip(aHead, -nx, -nz, angleFactor);
+  const hitSectionB = classifyHitSectionOnShip(bHead, nx, nz, angleFactor);
+
+  // Speed advantage asymmetry: much faster rammer deals extra damage & receives less
+  const speedAdvantageA = clamp(spdA - spdB, -10, 10);
   let damageA = 0;
   let damageB = 0;
-  if (impactSpeed > 1.6) {
-    const baseImpact = (impactSpeed - 1.2) * 2.15;
-    const massRatioA = bMass >= 999 ? 1.15 : clamp(bMass / Math.max(0.5, aMass), 0.45, 1.8);
-    const massRatioB = bMass >= 999 ? 0 : clamp(aMass / Math.max(0.5, bMass), 0.55, 2.2);
-    damageA = Math.max(2, Math.round(baseImpact * massRatioA * aMitigation));
-    damageB = bMass >= 999 ? 0 : Math.max(3, Math.round(baseImpact * 2.4 * massRatioB * bMitigation));
+
+  if (impactSpeed > 1.05) {
+    if (isLightScrape) {
+      damageA = impactSpeed > 1.7 ? Math.max(1, Math.round((impactSpeed - 1.2) * 0.7 * aMitigation)) : 0;
+      damageB =
+        bMass >= 999 || impactSpeed <= 1.7
+          ? 0
+          : Math.max(1, Math.round((impactSpeed - 1.2) * 0.85 * bMitigation));
+    } else {
+      const baseImpact = (impactSpeed - 1.0) * 2.55 * angleFactor;
+      const massRatioA = bMass >= 999 ? 1.2 : clamp(bMass / Math.max(0.5, aMass), 0.45, 1.85);
+      const massRatioB = bMass >= 999 ? 0 : clamp(aMass / Math.max(0.5, bMass), 0.5, 2.25);
+
+      const fasterBonusToB = speedAdvantageA > 1.8 ? clamp(1 + (speedAdvantageA - 1.5) * 0.14, 1.0, 1.85) : 1.0;
+      const fasterShieldA = speedAdvantageA > 1.8 ? clamp(1 - (speedAdvantageA - 1.5) * 0.11, 0.42, 1.0) : 1.0;
+
+      const fasterBonusToA = -speedAdvantageA > 1.8 ? clamp(1 + (-speedAdvantageA - 1.5) * 0.14, 1.0, 1.85) : 1.0;
+      const fasterShieldB = -speedAdvantageA > 1.8 ? clamp(1 - (-speedAdvantageA - 1.5) * 0.11, 0.42, 1.0) : 1.0;
+
+      const bowRamMultB = aBowHit > 0.65 ? 1.22 : 1.0;
+      const bowRamMultA = bBowHit > 0.65 ? 1.22 : 1.0;
+
+      damageA = Math.max(
+        2,
+        Math.round(baseImpact * massRatioA * aMitigation * fasterShieldA * fasterBonusToA * bowRamMultA)
+      );
+      damageB =
+        bMass >= 999
+          ? 0
+          : Math.max(
+              3,
+              Math.round(baseImpact * 2.1 * massRatioB * bMitigation * fasterBonusToB * fasterShieldB * bowRamMultB)
+            );
+    }
   }
+
+  // Post-ramming knockback recoil & momentum reduction
+  const knockbackSpeedA =
+    impactSpeed > 0.6
+      ? -clamp(spdA * (isLightScrape ? 0.12 : 0.34) + impactSpeed * (isLightScrape ? 0.08 : 0.22), 0.3, 4.8)
+      : -spdA * 0.25;
+  const knockbackSpeedB =
+    bMass >= 999
+      ? 0
+      : impactSpeed > 0.6
+        ? -clamp(spdB * (isLightScrape ? 0.1 : 0.28) + impactSpeed * (isLightScrape ? 0.06 : 0.18), 0.2, 4.2)
+        : spdB * 0.6;
 
   return {
     collided: true,
@@ -775,9 +910,24 @@ export function resolveShipCollision(
     pushBx: -nx * overlap * shareB || 0,
     pushBz: -nz * overlap * shareB || 0,
     impactSpeed,
+    angleFactor,
+    isLightScrape,
+    hitSectionA,
+    hitSectionB,
     damageA,
     damageB,
+    knockbackSpeedA,
+    knockbackSpeedB,
   };
+}
+
+export interface PirateAIContext {
+  squadIndex?: number;
+  squadCount?: number;
+  playerCannons?: number;
+  playerHullPct?: number;
+  playerSpeed?: number;
+  simTime?: number;
 }
 
 export interface PirateAISteering {
@@ -785,6 +935,49 @@ export interface PirateAISteering {
   desiredSpeed: number;
   nextBehavior: PirateShipData['behavior'];
   wantsToFire: boolean;
+}
+
+export function shouldPirateAttemptRam(
+  pirate: PirateShipData,
+  playerHullTier: number,
+  dist: number,
+  ctx?: PirateAIContext
+): boolean {
+  if (pirate.defeated) return false;
+  if (dist > 145 || dist < 14) return false;
+
+  const intel: AiIntelligenceTier = pirate.aiIntelligence ?? 'tactical';
+  const hullRatio = pirate.hull / Math.max(1, pirate.maxHull);
+  const pirSizeScore = pirate.tier === 'dreadnought' ? 6 : pirate.tier === 'galleon' ? 4.5 : pirate.tier === 'brigantine' ? 2.8 : 1.4;
+  const playerSizeScore = Math.max(1.2, playerHullTier * 0.95);
+  const massAdvantage = pirSizeScore / playerSizeScore;
+
+  // Out of cannons -> desperate ram if close enough
+  if (pirate.cannons <= 0 && dist < 110) return true;
+
+  // Currently committed to a ramming pass
+  if ((pirate.ramCommitTimer ?? 0) > 0) return true;
+  if ((pirate.ramCooldown ?? 0) > 0) return false;
+
+  const desperate = hullRatio < 0.42 || (ctx?.playerCannons !== undefined && pirate.cannons < ctx.playerCannons * 0.55);
+
+  if (intel === 'basic') {
+    // Basic AI only sporadically charges if severely desperate
+    return hullRatio < 0.34 && dist < 82 && ((ctx?.simTime ?? 1) % 14) < 4.5;
+  }
+
+  if (intel === 'tactical') {
+    if (massAdvantage >= 1.25 && dist < 96 && (ctx?.playerHullPct ?? 100) < 75) return true;
+    if (desperate && massAdvantage >= 0.72 && dist < 88) return true;
+    return false;
+  }
+
+  // Veteran AI makes shrewd situational rams: heavy bully rams OR desperate last-stand rams
+  if (massAdvantage >= 1.15 && dist < 105 && hullRatio > 0.35) return true;
+  if (desperate && hullRatio > 0.14 && dist < 95 && ((ctx?.playerSpeed ?? 0) < pirate.maxSpeed * 1.15)) {
+    return true;
+  }
+  return false;
 }
 
 export function computePirateAI(
@@ -798,7 +991,8 @@ export function computePirateAI(
   playerVz = 0,
   isHunter = false,
   playerAlliedToFaction = false,
-  escortAnchor?: { x: number; z: number } | null
+  escortAnchor?: { x: number; z: number } | null,
+  ctx?: PirateAIContext
 ): PirateAISteering {
   const dx = playerX - pirate.x;
   const dz = playerZ - pirate.z;
@@ -812,13 +1006,20 @@ export function computePirateAI(
 
   const sailMult = 0.35 + (pirate.sails / 100) * 0.65;
   const maxSpd = pirate.maxSpeed * sailMult;
+  const intel: AiIntelligenceTier = pirate.aiIntelligence ?? (pirate.tier === 'sloop' ? 'basic' : 'tactical');
 
   if (pirate.defeated) {
     return { targetHeading: pirate.heading, desiredSpeed: 0, nextBehavior: 'defeated', wantsToFire: false };
   }
 
-  const hullRatio = pirate.hull / pirate.maxHull;
-  if (inCombatWithPlayer && !pirate.isGhost && (hullRatio < 0.22 || pirate.cannons <= 0)) {
+  const hullRatio = pirate.hull / Math.max(1, pirate.maxHull);
+  const retreatThreshold = intel === 'basic' ? 0.16 : intel === 'tactical' ? 0.24 : 0.29;
+  if (
+    inCombatWithPlayer &&
+    !pirate.isGhost &&
+    ((hullRatio < retreatThreshold && (pirate.ramCommitTimer ?? 0) <= 0) ||
+      (pirate.cannons <= 0 && dist > 110))
+  ) {
     const fleeHeading = normalizeAngle(angleToPlayer + Math.PI);
     return {
       targetHeading: fleeHeading,
@@ -842,10 +1043,11 @@ export function computePirateAI(
       const aggroRange = isHunter ? Math.max(baseAggro, 780) : baseAggro;
       const intimidated = !pirate.isGhost && pirate.tier === 'sloop' && playerHullTier >= 4 && !isHunter;
       if (dist < aggroRange && !intimidated && pirate.hailCooldown <= 0) {
+        const engageDist = pirate.isGhost ? 95 : 85;
         return {
-          targetHeading: dist < 110 ? angleToPlayer : interceptHeading,
+          targetHeading: dist < 115 ? angleToPlayer : interceptHeading,
           desiredSpeed: maxSpd,
-          nextBehavior: dist < 72 ? 'hailing' : 'pursue',
+          nextBehavior: dist < engageDist ? 'hailing' : 'pursue',
           wantsToFire: false,
         };
       }
@@ -878,34 +1080,276 @@ export function computePirateAI(
     };
   }
 
-  const optimalDist = pirate.fireRange * 0.66;
-  const minSafeDist = pirate.isGhost && (pirate.ghostSize === 'colossal' || pirate.ghostSize === 'enormous') ? 54 : 36;
-
-  if (dist < minSafeDist) {
-    const veerHeading = normalizeAngle(angleToPlayer + Math.PI * 0.72);
+  // Situational AI Ramming pass
+  if (shouldPirateAttemptRam(pirate, playerHullTier, dist, ctx)) {
     return {
-      targetHeading: veerHeading,
-      desiredSpeed: maxSpd * 0.9,
-      nextBehavior: 'flank',
-      wantsToFire: dist < pirate.fireRange,
+      targetHeading: dist < 60 ? angleToPlayer : interceptHeading,
+      desiredSpeed: maxSpd * 1.16,
+      nextBehavior: 'ram',
+      wantsToFire: dist <= pirate.fireRange * 0.75 && pirate.cannons > 0,
     };
   }
 
-  if (dist > optimalDist * 1.25) {
-    const flankOffset = pirate.tier === 'sloop' || pirate.tier === 'brigantine' ? 0.32 : 0.12;
+  // Basic AI: simple chase and broadside when close
+  if (intel === 'basic') {
+    const closeDist = pirate.fireRange * 0.45;
+    if (dist < closeDist * 0.75) {
+      return {
+        targetHeading: normalizeAngle(angleToPlayer + Math.PI * 0.55),
+        desiredSpeed: maxSpd * 0.85,
+        nextBehavior: 'broadside',
+        wantsToFire: dist <= pirate.fireRange,
+      };
+    }
     return {
-      targetHeading: normalizeAngle(angleToPlayer + flankOffset),
+      targetHeading: angleToPlayer,
       desiredSpeed: maxSpd,
-      nextBehavior: 'pursue',
+      nextBehavior: dist <= pirate.fireRange * 0.8 ? 'broadside' : 'pursue',
       wantsToFire: dist <= pirate.fireRange,
     };
   }
 
-  const broadsideHeading = normalizeAngle(angleToPlayer + Math.PI * 0.48);
+  // Tactical & Veteran AI: coordinate surrounding angles across multiple attackers
+  const squadCount = Math.max(1, ctx?.squadCount ?? 1);
+  const squadIndex = ctx?.squadIndex ?? 0;
+  const sectorBias =
+    squadCount > 1
+      ? ((squadIndex / squadCount) * 2 - 1) * Math.PI * (intel === 'veteran' ? 0.82 : 0.62)
+      : 0;
+
+  const optimalDist = pirate.fireRange * (intel === 'veteran' ? 0.72 : 0.66);
+  const minSafeDist =
+    pirate.isGhost && (pirate.ghostSize === 'colossal' || pirate.ghostSize === 'enormous')
+      ? 56
+      : intel === 'veteran'
+        ? 44
+        : 36;
+
+  if (dist < minSafeDist) {
+    const veerHeading = normalizeAngle(angleToPlayer + (squadIndex % 2 === 0 ? 1 : -1) * Math.PI * 0.72);
+    return {
+      targetHeading: veerHeading,
+      desiredSpeed: maxSpd * 0.92,
+      nextBehavior: 'flank',
+      wantsToFire: dist <= pirate.fireRange,
+    };
+  }
+
+  if (squadCount > 1 && dist > minSafeDist && dist < pirate.fireRange * 1.35) {
+    // Move toward assigned flanking/surrounding ring point around the player
+    const baseBearing = Math.atan2(pirate.z - playerZ, pirate.x - playerX);
+    const desiredBearing = baseBearing + sectorBias * 0.42;
+    const goalX = playerX + Math.cos(desiredBearing) * optimalDist;
+    const goalZ = playerZ + Math.sin(desiredBearing) * optimalDist;
+    const toSlotHeading = Math.atan2(-(goalX - pirate.x), -(goalZ - pirate.z));
+    if (dist > optimalDist * 1.25) {
+      return {
+        targetHeading: toSlotHeading,
+        desiredSpeed: maxSpd,
+        nextBehavior: 'flank',
+        wantsToFire: dist <= pirate.fireRange,
+      };
+    }
+  }
+
+  if (dist > optimalDist * 1.25) {
+    const flankOffset =
+      (squadIndex % 2 === 0 ? 1 : -1) *
+      (pirate.tier === 'sloop' || pirate.tier === 'brigantine' ? 0.34 : 0.16);
+    return {
+      targetHeading: normalizeAngle(interceptHeading + flankOffset),
+      desiredSpeed: maxSpd,
+      nextBehavior: squadCount > 1 ? 'flank' : 'pursue',
+      wantsToFire: dist <= pirate.fireRange,
+    };
+  }
+
+  const sideSign = squadIndex % 2 === 0 ? 1 : -1;
+  const broadsideHeading = normalizeAngle(angleToPlayer + sideSign * Math.PI * 0.48);
   return {
     targetHeading: broadsideHeading,
-    desiredSpeed: maxSpd * 0.78,
+    desiredSpeed: maxSpd * (intel === 'veteran' ? 0.82 : 0.78),
     nextBehavior: 'broadside',
     wantsToFire: dist <= pirate.fireRange,
   };
 }
+
+export interface FriendlyAssistanceResult {
+  assists: boolean;
+  shouldFlee: boolean;
+  reason: string;
+}
+
+export function decideFriendlyAssistance(
+  candidate:
+    | {
+        kind: 'merchant';
+        ship: MerchantShipData;
+      }
+    | {
+        kind: 'pirate';
+        ship: PirateShipData;
+        faction?: PirateFactionState;
+      },
+  threatIsCrown: boolean,
+  playerReputation: number,
+  currentDay: number,
+  rand: () => number
+): FriendlyAssistanceResult {
+  if (candidate.kind === 'merchant') {
+    const m = candidate.ship;
+    if (m.sunk || m.hostileToPlayer || m.fleeingFromPlayer || m.surrenderedToPlayer) {
+      return { assists: false, shouldFlee: false, reason: 'unavailable' };
+    }
+    if (m.cannons <= 0 || m.isFishingTrawler) {
+      return { assists: false, shouldFlee: true, reason: 'unarmed civilian flees combat' };
+    }
+    if (m.isCrown) {
+      if (playerReputation <= -25) {
+        return { assists: false, shouldFlee: false, reason: 'Crown distrusts outlaws' };
+      }
+      // Crown assists lawful captains probabilistically, higher reputation = much more likely, not guaranteed
+      const chance =
+        playerReputation >= 45 ? 0.78 : playerReputation >= 12 ? 0.54 : playerReputation >= 0 ? 0.3 : 0.12;
+      return {
+        assists: rand() < chance,
+        shouldFlee: false,
+        reason: 'Crown patrol assessment',
+      };
+    }
+
+    // Armed civilian traders mostly flee unless bold + player has solid reputation
+    const temp: VesselTemperament = m.temperament ?? 'cautious';
+    if (temp === 'timid') {
+      return { assists: false, shouldFlee: true, reason: 'timid merchant flees' };
+    }
+    if (temp === 'bold' && playerReputation >= 25) {
+      const assists = rand() < 0.28;
+      return {
+        assists,
+        shouldFlee: !assists,
+        reason: assists ? 'bold merchant aids respected captain' : 'merchant avoids naval clash',
+      };
+    }
+    return { assists: false, shouldFlee: true, reason: 'merchant avoids danger' };
+  }
+
+  // Pirate ship assistance evaluation
+  const pir = candidate.ship;
+  if (pir.defeated || pir.isGhost || pir.cannons <= 0) {
+    return { assists: false, shouldFlee: false, reason: 'unavailable' };
+  }
+  const allied = isPirateAlliedWithPlayer(candidate.faction, currentDay, playerReputation);
+  const standing = candidate.faction?.playerStanding ?? 0;
+  const evilRep = isPlayerPirateAligned(playerReputation);
+
+  if (!allied && standing < 12 && !evilRep) {
+    return { assists: false, shouldFlee: false, reason: 'not friendly' };
+  }
+
+  // Friendly pirates are especially eager to back up evil/outlaw players or allied pacts
+  let chance = 0.26;
+  if (evilRep) chance += 0.36;
+  if (allied) chance += 0.22;
+  if (threatIsCrown && evilRep) chance += 0.14;
+  if (pir.personality === 'honorable') chance += 0.08;
+  chance = clamp(chance, 0.15, 0.86);
+
+  return {
+    assists: rand() < chance,
+    shouldFlee: false,
+    reason: evilRep ? 'corsair solidarity with outlaw captain' : 'allied pirate pact',
+  };
+}
+
+export function decideUnarmedOrTrawlerBehavior(
+  vessel: MerchantShipData,
+  distToThreat: number,
+  threatSpeed: number,
+  simTime: number
+): 'ignore' | 'flee' | 'desperate_ram' {
+  const hullRatio = vessel.hull / Math.max(1, vessel.maxHull);
+  const temp: VesselTemperament = vessel.temperament ?? (vessel.isFishingTrawler ? 'timid' : 'cautious');
+  const panicRange = temp === 'timid' ? 210 : temp === 'cautious' ? 135 : 88;
+
+  if (!vessel.fleeingFromPlayer && !vessel.hostileToPlayer && distToThreat > panicRange) {
+    return 'ignore';
+  }
+
+  const cornered =
+    distToThreat < 84 &&
+    (threatSpeed >= vessel.maxSpeed * 0.9 || hullRatio < 0.45);
+
+  if (
+    cornered &&
+    vessel.cannons <= 0 &&
+    (vessel.desperateRamCooldown ?? 0) <= 0 &&
+    (temp === 'bold' || (temp === 'cautious' && hullRatio < 0.35 && ((simTime % 12) < 4)))
+  ) {
+    return 'desperate_ram';
+  }
+
+  return 'flee';
+}
+
+export interface IceSheetImpactResult {
+  shattered: boolean;
+  newHp: number;
+  newCrackStage: 0 | 1 | 2 | 3;
+  shipHullDamage: number;
+  speedRetainedMult: number;
+  reboundSpeed: number;
+}
+
+export function resolveBreakableIceSheetCollision(
+  shipSpeed: number,
+  shipMass: number,
+  hullTier: number,
+  sheetHp: number,
+  sheetMaxHp: number,
+  thickness: 1 | 2 | 3
+): IceSheetImpactResult {
+  const absSpd = Math.abs(shipSpeed);
+  // Larger, heavier ships (hullTier & mass) break ice far more effortlessly
+  const breakingPower = absSpd * (1 + hullTier * 0.42 + shipMass * 0.35);
+  const armorNeed = thickness === 1 ? 7 : thickness === 2 ? 17 : 31;
+
+  if (absSpd < 1.2) {
+    return {
+      shattered: false,
+      newHp: sheetHp,
+      newCrackStage: sheetHp <= sheetMaxHp * 0.35 ? 2 : sheetHp < sheetMaxHp * 0.78 ? 1 : 0,
+      shipHullDamage: 0,
+      speedRetainedMult: 0.72,
+      reboundSpeed: 0,
+    };
+  }
+
+  const iceDmg = Math.max(4, breakingPower * (thickness === 1 ? 2.4 : thickness === 2 ? 1.25 : 0.72));
+  const nextHp = Math.max(0, sheetHp - iceDmg);
+  const shattered = nextHp <= 0 || breakingPower >= armorNeed * 1.45;
+  const newCrackStage: 0 | 1 | 2 | 3 = shattered
+    ? 3
+    : nextHp <= sheetMaxHp * 0.36
+      ? 2
+      : nextHp < sheetMaxHp * 0.85
+        ? 1
+        : 0;
+
+  // Hull damage scales down sharply for thick heavy hulls, up when slamming thick shelf ice fast in a small boat
+  const hullShield = clamp(1.08 - hullTier * 0.12, 0.28, 1.0);
+  const rawHullDmg =
+    thickness === 1
+      ? absSpd > 6 ? 1 : 0
+      : Math.max(1, Math.round((absSpd * 0.75 + thickness * 2.1) * hullShield * (shattered ? 0.65 : 1.05)));
+
+  return {
+    shattered,
+    newHp: shattered ? 0 : nextHp,
+    newCrackStage,
+    shipHullDamage: rawHullDmg,
+    speedRetainedMult: shattered ? clamp(0.68 + hullTier * 0.04, 0.65, 0.92) : 0.25,
+    reboundSpeed: shattered ? 0 : -Math.max(1.2, absSpd * 0.32),
+  };
+}
+

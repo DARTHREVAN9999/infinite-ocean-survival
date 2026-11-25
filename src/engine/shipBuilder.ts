@@ -9,6 +9,7 @@ import {
   FloatingCrateData,
   GhostSizeTier,
   PirateFactionId,
+  RepairPriority,
   ShipUpgrades,
   VesselClass,
   WreckArchetype,
@@ -45,6 +46,16 @@ export interface BuiltPlayerShip {
   lanternLight: THREE.PointLight;
 }
 
+export interface DeckCrewActor {
+  group: THREE.Group;
+  baseX: number;
+  baseZ: number;
+  patrolX: number;
+  patrolZ: number;
+  phase: number;
+  speedMult: number;
+}
+
 export interface BuiltNpcShip {
   root: THREE.Group;
   sails: THREE.Mesh[];
@@ -55,8 +66,29 @@ export interface BuiltNpcShip {
   fadeMaterials?: THREE.Material[];
   cannonGroups: THREE.Group[];
   damagePatches: THREE.Group[];
+  crewActors: DeckCrewActor[];
   halfLength: number;
   halfBeam: number;
+}
+
+export function animateDeckCrewActors(actors: DeckCrewActor[] | undefined, time: number): void {
+  if (!actors || actors.length === 0) return;
+  for (let i = 0; i < actors.length; i++) {
+    const actor = actors[i];
+    const t = time * actor.speedMult + actor.phase;
+    const sx = Math.sin(t * 0.72) * actor.patrolX;
+    const sz = Math.cos(t * 0.95) * actor.patrolZ;
+    actor.group.position.x = actor.baseX + sx;
+    actor.group.position.z = actor.baseZ + sz;
+    const vx = Math.cos(t * 0.72) * 0.72 * actor.patrolX;
+    const vz = -Math.sin(t * 0.95) * 0.95 * actor.patrolZ;
+    if (Math.abs(vx) + Math.abs(vz) > 0.04) {
+      actor.group.rotation.y = Math.atan2(vx, vz);
+    }
+    actor.group.position.y =
+      (actor.group.userData.deckBaseY as number || actor.group.position.y) +
+      Math.abs(Math.sin(t * 4.4)) * 0.045;
+  }
 }
 
 function createHullDamagePatches(len: number, beam: number, deckY: number): THREE.Group[] {
@@ -195,7 +227,7 @@ export function animateWavingFlag(flagMesh: THREE.Mesh | null, time: number, win
   pos.needsUpdate = true;
 }
 
-function createSailorFigure(member: CrewMember): THREE.Group {
+function createSailorFigure(member: Pick<CrewMember, 'coatColor' | 'hatStyle'>): THREE.Group {
   const g = new THREE.Group();
 
   const legsMat = new THREE.MeshStandardMaterial({ color: 0x262930, roughness: 0.85 });
@@ -651,6 +683,69 @@ export function buildPlayerShip(
     }
   }
 
+  // 11a. Physical Ship Fishing Gear Attachments (stern & gunwales)
+  const fg = upgrades.fishingGear ?? 'none';
+  if (fg !== 'none') {
+    const netMat = new THREE.MeshStandardMaterial({ color: 0x8e8471, roughness: 0.94, wireframe: false });
+    const caneMat = new THREE.MeshStandardMaterial({ color: 0xa47b47, roughness: 0.8 });
+    const buoyMat = new THREE.MeshStandardMaterial({ color: 0xc25438, roughness: 0.72 });
+
+    // Basic stern lines (all tiers >= basic_lines include rigged stern lines)
+    for (const side of [-1, 1]) {
+      const lineSpool = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.32, 8), ropeMat);
+      lineSpool.rotation.z = Math.PI / 2;
+      lineSpool.position.set(side * (beam * 0.25), deckY + 0.62, len * 0.45);
+      root.add(lineSpool);
+
+      const trailingLine = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 2.2, 5), ropeMat);
+      trailingLine.rotation.x = Math.PI * 0.36;
+      trailingLine.position.set(side * (beam * 0.26), deckY - 0.12, len * 0.52);
+      root.add(trailingLine);
+    }
+
+    if (fg === 'hand_rods' || fg === 'small_net' || fg === 'trawling_net' || fg === 'deep_longline') {
+      for (const side of [-1, 1]) {
+        for (let r = 0; r < 2; r++) {
+          const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.045, 2.8, 6), caneMat);
+          rod.rotation.z = side * -Math.PI * 0.34;
+          rod.rotation.x = 0.18;
+          rod.position.set(side * (beam * 0.48), deckY + 0.85, len * (0.18 + r * 0.14));
+          root.add(rod);
+        }
+      }
+    }
+
+    if (fg === 'small_net' || fg === 'trawling_net' || fg === 'deep_longline') {
+      const davit = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 2.1), darkTrimMat);
+      davit.position.set(beam * 0.48, deckY + 1.05, len * 0.26);
+      root.add(davit);
+      const rolledNet = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 1.85, 8), netMat);
+      rolledNet.rotation.x = Math.PI / 2;
+      rolledNet.position.set(beam * 0.5, deckY + 0.55, len * 0.24);
+      root.add(rolledNet);
+    }
+
+    if (fg === 'trawling_net' || fg === 'deep_longline') {
+      for (const side of [-1, 1]) {
+        const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 4.2, 7), darkTrimMat);
+        boom.rotation.z = side * -Math.PI * 0.42;
+        boom.position.set(side * (beam * 0.65), deckY + 0.9, len * 0.38);
+        root.add(boom);
+      }
+      const sternNet = new THREE.Mesh(new THREE.BoxGeometry(beam * 0.72, 0.55, 0.95), netMat);
+      sternNet.position.set(0, deckY + 0.32, len * 0.5);
+      root.add(sternNet);
+    }
+
+    if (fg === 'deep_longline') {
+      for (const side of [-1, 1]) {
+        const floatBuoy = new THREE.Mesh(new THREE.SphereGeometry(0.24, 8, 6), buoyMat);
+        floatBuoy.position.set(side * (beam * 0.38), deckY + 0.78, len * 0.46);
+        root.add(floatBuoy);
+      }
+    }
+  }
+
   // 11b. Dynamic hull damage breach patches
   const damagePatches = createHullDamagePatches(len, beam, deckY);
   for (const patch of damagePatches) {
@@ -948,15 +1043,35 @@ export function buildNpcShip(
       : factionKind === 'crown'
         ? '#1d4ed8'
         : '#3b5972';
+  const crewActors: DeckCrewActor[] = [];
   if (!isGhost) {
-    const figureMat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(figureColor),
-      roughness: 0.82,
-    });
-    for (let c = 0; c < 4; c++) {
-      const crewMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.2, 1.35, 7), figureMat);
-      crewMesh.position.set(((c % 2) * 2 - 1) * cfg.beam * 0.2, deckY + 0.7, (c - 1.5) * 1.7);
-      root.add(crewMesh);
+    const hatStyles: CrewMember['hatStyle'][] =
+      factionKind === 'crown'
+        ? ['tricorne', 'tricorne', 'beanie', 'tricorne']
+        : factionKind === 'pirate'
+          ? ['bandana', 'tricorne', 'bandana', 'none']
+          : ['beanie', 'none', 'tricorne', 'beanie'];
+    const crewVisualCount = cfg.len >= 20 ? 6 : cfg.len >= 14 ? 5 : 4;
+    for (let c = 0; c < crewVisualCount; c++) {
+      const fig = createSailorFigure({
+        coatColor: figureColor,
+        hatStyle: hatStyles[c % hatStyles.length],
+      });
+      const baseX = ((c % 2) * 2 - 1) * cfg.beam * 0.21;
+      const baseZ = ((c / Math.max(1, crewVisualCount - 1)) * 2 - 1) * cfg.len * 0.23;
+      const baseY = deckY + (cfg.raisedCastle && baseZ > cfg.len * 0.14 ? 1.56 : 0.08);
+      fig.position.set(baseX, baseY, baseZ);
+      fig.userData.deckBaseY = baseY;
+      root.add(fig);
+      crewActors.push({
+        group: fig,
+        baseX,
+        baseZ,
+        patrolX: Math.min(0.85, cfg.beam * 0.11),
+        patrolZ: Math.min(2.1, cfg.len * 0.085),
+        phase: c * 1.47 + (cfg.len * 0.21),
+        speedMult: 0.72 + (c % 3) * 0.18,
+      });
     }
   }
 
@@ -1069,6 +1184,7 @@ export function buildNpcShip(
     fadeMaterials: isGhost ? fadeMaterials : undefined,
     cannonGroups,
     damagePatches,
+    crewActors,
     halfLength: cfg.len * 0.5,
     halfBeam: cfg.beam * 0.5,
   };
@@ -1228,16 +1344,32 @@ export function buildFleetShipMesh(
     root.add(patch);
   }
 
-  // Fleet crew figures tinted with player's primary flag dye
+  // Articulated patrolling fleet crew figures tinted with player's primary flag dye
   const crewCoatHex = FLAG_DYES[customFlag.primaryDye]?.hex ?? '#1d4ed8';
-  const fleetCrewMat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(crewCoatHex),
-    roughness: 0.8,
-  });
-  for (let c = 0; c < Math.min(4, Math.max(2, Math.floor(fleetShip.crewCount / 4))); c++) {
-    const sailor = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.2, 1.32, 7), fleetCrewMat);
-    sailor.position.set(((c % 2) * 2 - 1) * beam * 0.2, deckY + 0.68, (c - 1.5) * 1.6);
+  const fleetHatStyles: CrewMember['hatStyle'][] = ['tricorne', 'bandana', 'beanie', 'none'];
+  const fleetCrewActors: DeckCrewActor[] = [];
+  const visualFleetCrew = Math.min(5, Math.max(3, Math.floor(fleetShip.crewCount / 4)));
+  for (let c = 0; c < visualFleetCrew; c++) {
+    const sailor = createSailorFigure({
+      coatColor: crewCoatHex,
+      hatStyle: fleetHatStyles[c % fleetHatStyles.length],
+    });
+    const baseX = ((c % 2) * 2 - 1) * beam * 0.2;
+    const baseZ = ((c / Math.max(1, visualFleetCrew - 1)) * 2 - 1) * len * 0.2;
+    const hasQ = fleetShip.deckLevel >= 1 || fleetShip.shipClass === 'heavy_warship' || fleetShip.shipClass === 'large_merchant';
+    const baseY = deckY + (hasQ && baseZ > len * 0.16 ? 1.2 + fleetShip.deckLevel * 0.45 : 0.08);
+    sailor.position.set(baseX, baseY, baseZ);
+    sailor.userData.deckBaseY = baseY;
     root.add(sailor);
+    fleetCrewActors.push({
+      group: sailor,
+      baseX,
+      baseZ,
+      patrolX: Math.min(0.8, beam * 0.1),
+      patrolZ: Math.min(1.8, len * 0.08),
+      phase: c * 1.33,
+      speedMult: 0.78 + (c % 2) * 0.2,
+    });
   }
 
   // Allied teal-gold stern lantern so player instantly distinguishes fleet escorts at night
@@ -1261,6 +1393,7 @@ export function buildFleetShipMesh(
     sailTexture: customSailTex,
     cannonGroups,
     damagePatches,
+    crewActors: fleetCrewActors,
     halfLength: len * 0.5,
     halfBeam: beam * 0.5,
   };
@@ -1618,6 +1751,24 @@ export function buildFloatingCrateMesh(kind: FloatingCrateData['kind']): THREE.G
     );
     raftLantern.position.set(0.3, 2.25, 0);
     g.add(raftLantern);
+  } else if (kind === 'timber_debris') {
+    for (let i = 0; i < 4; i++) {
+      const plank = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.12, 2.2 + (i % 2) * 0.6), woodMat);
+      plank.position.set((i - 1.5) * 0.42, 0.08, ((i % 2) - 0.5) * 0.3);
+      plank.rotation.y = (i - 1.5) * 0.24;
+      g.add(plank);
+    }
+  } else if (kind === 'supply_bundle') {
+    const sackMat = new THREE.MeshStandardMaterial({ color: 0x9b8b6d, roughness: 0.92 });
+    const box = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.72, 0.9), woodMat);
+    box.position.y = 0.12;
+    g.add(box);
+    const sack = new THREE.Mesh(new THREE.DodecahedronGeometry(0.42, 0), sackMat);
+    sack.position.set(0.35, 0.56, 0.15);
+    g.add(sack);
+    const cask = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.72, 8), bandMat);
+    cask.position.set(-0.35, 0.48, -0.15);
+    g.add(cask);
   } else {
     const goldMat = new THREE.MeshStandardMaterial({ color: 0xe3b84c, roughness: 0.28, metalness: 0.85 });
     const chest = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.95, 1.0), woodMat);
@@ -1639,3 +1790,173 @@ export function buildFloatingCrateMesh(kind: FloatingCrateData['kind']): THREE.G
 
   return g;
 }
+
+let sharedDamageAssets: {
+  charMat: THREE.MeshStandardMaterial;
+  splinterMat: THREE.MeshStandardMaterial;
+  tearMat: THREE.MeshStandardMaterial;
+  ironMat: THREE.MeshStandardMaterial;
+  flameMat: THREE.MeshBasicMaterial;
+  craterGeo: THREE.CylinderGeometry;
+  gashGeo: THREE.BoxGeometry;
+  splinterGeo: THREE.BoxGeometry;
+  tearGeo: THREE.BoxGeometry;
+  collarGeo: THREE.CylinderGeometry;
+  flameGeo: THREE.ConeGeometry;
+} | null = null;
+
+function getSharedDamageAssets() {
+  if (sharedDamageAssets) return sharedDamageAssets;
+  sharedDamageAssets = {
+    charMat: new THREE.MeshStandardMaterial({ color: 0x16110d, roughness: 0.96 }),
+    splinterMat: new THREE.MeshStandardMaterial({ color: 0x735234, roughness: 0.9 }),
+    tearMat: new THREE.MeshStandardMaterial({ color: 0x26211c, roughness: 0.94 }),
+    ironMat: new THREE.MeshStandardMaterial({ color: 0x25282c, roughness: 0.55, metalness: 0.72 }),
+    flameMat: new THREE.MeshBasicMaterial({ color: 0xff7b1c }),
+    craterGeo: new THREE.CylinderGeometry(0.42, 0.36, 0.24, 7),
+    gashGeo: new THREE.BoxGeometry(0.28, 0.52, 1.35),
+    splinterGeo: new THREE.BoxGeometry(0.11, 0.12, 0.78),
+    tearGeo: new THREE.BoxGeometry(0.85, 0.95, 0.14),
+    collarGeo: new THREE.CylinderGeometry(0.28, 0.32, 0.45, 7),
+    flameGeo: new THREE.ConeGeometry(0.26, 0.85, 5),
+  };
+  return sharedDamageAssets;
+}
+
+export function createBattleDamageMarkMesh(
+  section: RepairPriority,
+  kind: 'cannon' | 'ram',
+  severity: number,
+  hasFire: boolean
+): THREE.Group {
+  const a = getSharedDamageAssets();
+  const g = new THREE.Group();
+  const s = Math.max(0.6, Math.min(1.5, severity));
+
+  if (section === 'sails') {
+    const tear = new THREE.Mesh(a.tearGeo, a.tearMat);
+    tear.scale.set(s, s * 1.15, 1);
+    tear.rotation.z = (kind === 'ram' ? 0.35 : -0.25);
+    g.add(tear);
+  } else if (section === 'mast') {
+    const collar = new THREE.Mesh(a.collarGeo, a.charMat);
+    collar.scale.set(s, s, s);
+    g.add(collar);
+    const shard = new THREE.Mesh(a.splinterGeo, a.splinterMat);
+    shard.rotation.set(0.4, 0.2, 0.7);
+    shard.scale.setScalar(s);
+    g.add(shard);
+  } else if (section === 'steering') {
+    const gash = new THREE.Mesh(a.gashGeo, a.charMat);
+    gash.rotation.y = Math.PI / 2;
+    gash.scale.set(s, s, s * 0.9);
+    g.add(gash);
+    const sp = new THREE.Mesh(a.splinterGeo, a.splinterMat);
+    sp.rotation.y = 0.45;
+    sp.scale.setScalar(s);
+    g.add(sp);
+  } else if (section === 'cannons') {
+    const crater = new THREE.Mesh(a.craterGeo, a.ironMat);
+    crater.rotation.z = Math.PI / 2;
+    crater.scale.set(s * 0.85, 1, s * 0.85);
+    g.add(crater);
+    const scorch = new THREE.Mesh(a.splinterGeo, a.charMat);
+    scorch.rotation.x = 0.5;
+    g.add(scorch);
+  } else if (section === 'deck') {
+    const breach = new THREE.Mesh(a.craterGeo, a.charMat);
+    breach.scale.set(s * 1.1, 0.75, s * 1.1);
+    g.add(breach);
+    const plank = new THREE.Mesh(a.splinterGeo, a.splinterMat);
+    plank.position.y = 0.14;
+    plank.rotation.y = 0.6;
+    plank.scale.setScalar(s);
+    g.add(plank);
+  } else {
+    // Hull cannon breach or wide ramming gash
+    if (kind === 'ram') {
+      const gash = new THREE.Mesh(a.gashGeo, a.charMat);
+      gash.scale.set(s, s, s * 1.2);
+      g.add(gash);
+    } else {
+      const hole = new THREE.Mesh(a.craterGeo, a.charMat);
+      hole.rotation.z = Math.PI / 2;
+      hole.scale.setScalar(s);
+      g.add(hole);
+    }
+    const sp1 = new THREE.Mesh(a.splinterGeo, a.splinterMat);
+    sp1.rotation.set(0.38, 0.2, 0.2);
+    sp1.scale.setScalar(s);
+    g.add(sp1);
+  }
+
+  if (hasFire) {
+    const flame = new THREE.Mesh(a.flameGeo, a.flameMat);
+    flame.position.set(0, 0.42 * s, 0);
+    flame.scale.setScalar(0.85 * s);
+    g.add(flame);
+    g.userData.flameMesh = flame;
+    g.userData.firePhase = Math.random() * Math.PI * 2;
+  }
+
+  return g;
+}
+
+let sharedRockAssets: {
+  rockGeo: THREE.DodecahedronGeometry;
+  foamGeo: THREE.TorusGeometry;
+  rockDarkMat: THREE.MeshStandardMaterial;
+  rockMidMat: THREE.MeshStandardMaterial;
+  foamMat: THREE.MeshBasicMaterial;
+} | null = null;
+
+function getSharedRockAssets() {
+  if (sharedRockAssets) return sharedRockAssets;
+  sharedRockAssets = {
+    rockGeo: new THREE.DodecahedronGeometry(1, 0),
+    foamGeo: new THREE.TorusGeometry(1, 0.11, 6, 18),
+    rockDarkMat: new THREE.MeshStandardMaterial({ color: 0x262d34, roughness: 0.94, flatShading: true }),
+    rockMidMat: new THREE.MeshStandardMaterial({ color: 0x3b444d, roughness: 0.9, flatShading: true }),
+    foamMat: new THREE.MeshBasicMaterial({ color: 0xdbeafe, transparent: true, opacity: 0.45, depthWrite: false }),
+  };
+  return sharedRockAssets;
+}
+
+export function buildSeaRockClusterMesh(
+  radius: number,
+  height: number,
+  variant: number,
+  opts: { submerged?: boolean; isReef?: boolean } = {}
+): THREE.Group {
+  const a = getSharedRockAssets();
+  const g = new THREE.Group();
+  const yOffset = opts.submerged ? -height * 0.48 : 0;
+
+  const mainSpire = new THREE.Mesh(a.rockGeo, a.rockDarkMat);
+  mainSpire.scale.set(radius * 0.72, height * 0.75, radius * 0.68);
+  mainSpire.position.set(0, height * 0.28 + yOffset, 0);
+  mainSpire.rotation.set(0.15 * variant, variant * 0.8, -0.1);
+  g.add(mainSpire);
+
+  const count = 2 + (variant % 3);
+  for (let i = 0; i < count; i++) {
+    const ang = (i / count) * Math.PI * 2 + variant * 0.7;
+    const dist = radius * (0.42 + (i % 2) * 0.16);
+    const subH = height * (0.42 + ((i + variant) % 3) * 0.12);
+    const subR = radius * (0.38 + ((i + 1) % 2) * 0.14);
+    const sub = new THREE.Mesh(a.rockGeo, i % 2 === 0 ? a.rockMidMat : a.rockDarkMat);
+    sub.scale.set(subR, subH, subR * 0.85);
+    sub.position.set(Math.cos(ang) * dist, subH * 0.2 + yOffset, Math.sin(ang) * dist);
+    sub.rotation.set(ang * 0.3, ang, 0.2);
+    g.add(sub);
+  }
+
+  const foam = new THREE.Mesh(a.foamGeo, a.foamMat);
+  foam.rotation.x = Math.PI / 2;
+  foam.position.y = 0.08;
+  foam.scale.setScalar(radius * (opts.isReef ? 1.06 : 0.98));
+  g.add(foam);
+
+  return g;
+}
+

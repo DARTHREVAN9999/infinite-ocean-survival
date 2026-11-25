@@ -35,6 +35,11 @@ import { PauseSettingsModal } from './components/PauseSettingsModal';
 import { GameOverModal } from './components/GameOverModal';
 import { WeatherModal } from './components/WeatherModal';
 import { AdminModal } from './components/AdminModal';
+import { FloatingDamageLayer } from './components/FloatingDamageLayer';
+import { FirstPersonHud } from './components/FirstPersonHud';
+import { FishingMinigameModal } from './components/FishingMinigameModal';
+import { SettlementModal } from './components/SettlementModal';
+import { TreasureMapModal } from './components/TreasureMapModal';
 
 type ActiveModal =
   | null
@@ -43,6 +48,9 @@ type ActiveModal =
   | { type: 'map' }
   | { type: 'weather' }
   | { type: 'admin' }
+  | { type: 'fishing' }
+  | { type: 'treasure' }
+  | { type: 'settlement'; id: string }
   | { type: 'wreck'; id: string }
   | { type: 'vessel_menu'; id: string }
   | { type: 'merchant_trade'; id: string }
@@ -56,6 +64,7 @@ type ActiveModal =
 function modalMusicKind(m: ActiveModal): string | null {
   if (!m) return null;
   if (m.type === 'merchant_trade' || m.type === 'vessel_menu') return 'merchant';
+  if (m.type === 'settlement') return 'settlement';
   if (m.type === 'wreck') return 'wreck';
   if (m.type === 'pirate_parley') return 'pirate_trade';
   return null;
@@ -109,10 +118,16 @@ export function App() {
       openModal({ type: 'pirate_parley', id: prompt.id });
     } else if (prompt.kind === 'monster') {
       openModal({ type: 'monster', id: prompt.id });
+    } else if (prompt.kind === 'monster_carcass' || prompt.kind === 'sea_wildlife') {
+      openModal({ type: 'fishing' });
+    } else if (prompt.kind === 'island') {
+      engine.landOnIsland(prompt.id);
+    } else if (prompt.kind === 'settlement') {
+      openModal({ type: 'settlement', id: prompt.id });
     }
   }, [openModal]);
 
-  const handleHotkeyRef = useRef<(menu: 'ship' | 'journal' | 'map' | 'pause' | 'interact') => void>(() => {});
+  const handleHotkeyRef = useRef<(menu: 'ship' | 'journal' | 'map' | 'pause' | 'interact' | 'fishing') => void>(() => {});
   handleHotkeyRef.current = (menu) => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -214,6 +229,10 @@ export function App() {
         engine.setModalOpen(true);
         setModal({ type: 'merchant_victory', merchant: { ...merchant } });
       },
+      onSettlementOpen: (settlement) => {
+        engine.setModalOpen(true, 'settlement');
+        setModal({ type: 'settlement', id: settlement.id });
+      },
       onStateChange: (nextPhase) => {
         setPhase(nextPhase);
         if (nextPhase !== 'playing') {
@@ -293,6 +312,9 @@ export function App() {
   const activeMonsterEncounter: SeaMonsterData | null =
     modal?.type === 'monster' ? engineRef.current?.getMonsterById(modal.id) ?? null : null;
 
+  const activeSettlement =
+    modal?.type === 'settlement' ? engineRef.current?.getSettlementById(modal.id) ?? null : null;
+
   const adminTargets =
     modal?.type === 'admin' && hud?.adminUnlocked
       ? engineRef.current?.getAdminTeleportTargets() ?? []
@@ -305,7 +327,9 @@ export function App() {
       <div
         ref={mountRef}
         data-testid="ocean-canvas"
-        className="fixed inset-0 w-full h-full cursor-grab active:cursor-grabbing"
+        className={`fixed inset-0 w-full h-full ${
+          hud?.firstPerson?.active && !modal ? 'cursor-none' : 'cursor-grab active:cursor-grabbing'
+        }`}
       />
 
       {phase === 'title' && (
@@ -318,12 +342,16 @@ export function App() {
 
       {phase === 'playing' && hud && (
         <>
+          <FloatingDamageLayer damages={hud.floatingDamages ?? []} />
+
           <MainHud
             hud={hud}
             muted={muted}
             onOpenShip={() => openModal({ type: 'ship' })}
             onOpenJournal={() => openModal({ type: 'journal' })}
             onOpenMap={() => openModal({ type: 'map' })}
+            onOpenFishing={() => openModal({ type: 'fishing' })}
+            onOpenTreasureMaps={() => openModal({ type: 'treasure' })}
             onOpenWeather={() => openModal({ type: 'weather' })}
             onOpenAdmin={() => openModal({ type: 'admin' })}
             onOpenPause={() => engineRef.current?.setPhase('paused')}
@@ -333,14 +361,27 @@ export function App() {
             }}
             onToggleStop={() => engineRef.current?.toggleStop()}
             onInteract={handleInteract}
+            onAcceptBounty={() => engineRef.current?.acceptBounty()}
+            onDeclineBounty={() => engineRef.current?.declineBounty()}
             onDismissTutorial={(disableAll) => engineRef.current?.dismissTutorialToast(disableAll)}
             onDismissSupplyWarning={(key) => engineRef.current?.dismissSupplyWarning(key)}
           />
 
-          {hud.combat.active && !modal && (
+          {hud.firstPerson?.active && !modal && (
+            <FirstPersonHud
+              fps={hud.firstPerson}
+              onSwitchWeapon={(w) => engineRef.current?.switchFpsWeapon(w)}
+              onReload={() => engineRef.current?.triggerFpsReload()}
+              onInteract={() => engineRef.current?.handleFpsInteract()}
+              onBoardShip={() => engineRef.current?.boardShipFromIsland()}
+            />
+          )}
+
+          {hud.combat.active && !modal && !hud.firstPerson?.active && (
             <CombatCommandBar
               hud={hud}
               onSetCommand={(cmd) => engineRef.current?.setCombatCommand(cmd)}
+              onSelectTarget={(enemyId) => engineRef.current?.setPrimaryCombatTarget(enemyId)}
             />
           )}
         </>
@@ -371,6 +412,9 @@ export function App() {
           }
           onSpawnGhostShip={(sz) =>
             engineRef.current?.adminSpawnGhostShip(sz) ?? { ok: false, message: 'Unavailable.' }
+          }
+          onProjectBounty={() =>
+            engineRef.current?.adminProjectBounty() ?? { ok: false, message: 'Unavailable.' }
           }
           onSetWeather={(wt) =>
             engineRef.current?.adminSetWeather(wt) ?? { ok: false, message: 'Unavailable.' }
@@ -421,6 +465,88 @@ export function App() {
           }
           onSetFleetCommand={(id, cmd) => engineRef.current?.setFleetShipCommand(id, cmd)}
           onRenameFleetShip={(id, name) => engineRef.current?.renameFleetShip(id, name)}
+          onBuyFishingGear={(gearId) =>
+            engineRef.current?.buyFishingGear(gearId) ?? {
+              ok: false,
+              message: 'Unavailable.',
+            }
+          }
+          onConvertFishToFood={(kind, qty) =>
+            engineRef.current?.convertFishToFood(kind, qty) ?? {
+              ok: false,
+              message: 'Unavailable.',
+            }
+          }
+        />
+      )}
+
+      {phase === 'playing' && modal?.type === 'fishing' && hud && (
+        <FishingMinigameModal
+          biome={hud.biome ?? 'temperate'}
+          biomeLabel={hud.biomeLabel ?? 'Normal Ocean'}
+          fishingGear={hud.fishingGear ?? 'none'}
+          nearbyTarget={hud.nearbyFishTarget}
+          onClose={() => openModal(null)}
+          onCatchSuccess={(spec) =>
+            engineRef.current?.completeManualFishingCatch(spec) ?? {
+              ok: false,
+              message: 'Unavailable.',
+            }
+          }
+          onHarvestNearbyTarget={(kind, id) =>
+            engineRef.current?.harvestNearbyFishingTarget(kind, id) ?? {
+              ok: false,
+              message: 'Unavailable.',
+              foodAdded: 0,
+              saltAdded: 0,
+            }
+          }
+        />
+      )}
+
+      {phase === 'playing' && modal?.type === 'treasure' && (
+        <TreasureMapModal save={saveState} onClose={() => openModal(null)} />
+      )}
+
+      {phase === 'playing' && modal?.type === 'settlement' && activeSettlement && (
+        <SettlementModal
+          settlement={activeSettlement}
+          save={saveState}
+          onClose={() => openModal(null)}
+          onStepAshore={(islandId) => {
+            openModal(null);
+            engineRef.current?.landOnIsland(islandId);
+          }}
+          onTrade={(sId, mode, resId, qty) =>
+            engineRef.current?.tradeWithSettlement(sId, mode, resId, qty) ?? {
+              ok: false,
+              message: 'Unavailable.',
+            }
+          }
+          onHireCrew={(sId, crewId) =>
+            engineRef.current?.hireSettlementCrew(sId, crewId) ?? {
+              ok: false,
+              message: 'Unavailable.',
+            }
+          }
+          onHearRumor={(sId) =>
+            engineRef.current?.hearSettlementRumor(sId) ?? {
+              ok: false,
+              message: 'Unavailable.',
+            }
+          }
+          onCompleteErrand={(sId) =>
+            engineRef.current?.completeSettlementErrand(sId) ?? {
+              ok: false,
+              message: 'Unavailable.',
+            }
+          }
+          onBuyFishingGear={(gearId) =>
+            engineRef.current?.buyFishingGear(gearId) ?? {
+              ok: false,
+              message: 'Unavailable.',
+            }
+          }
         />
       )}
 

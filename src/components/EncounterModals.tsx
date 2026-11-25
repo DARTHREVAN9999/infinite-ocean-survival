@@ -100,7 +100,16 @@ export const InnocentVesselModal: React.FC<InnocentVesselModalProps> = ({
         <div className="p-6 overflow-y-auto nautical-scroll space-y-4">
           {merchant.isFishingTrawler && (
             <div className="p-3 rounded bg-[#142733] border border-[#5ba3b8]/45 text-xs text-[#c9ecf7]">
-              Fishing Vessel: Only stocks &amp; trades Provisions (Food) and Fresh Water.
+              Fishing Vessel: Only stocks &amp; trades Provisions (Food), Fresh Water, and Sea Salt.
+            </div>
+          )}
+
+          {merchant.canTrade === false && (
+            <div
+              data-testid="crown-nontrading-notice"
+              className="p-3 rounded bg-[#2d1b1b] border border-[#d89b3c]/45 text-xs text-[#f8d7be] font-semibold"
+            >
+              Active Crown Fighting Vessel: This warship is on Admiralty combat patrol and does not engage in private trade.
             </div>
           )}
 
@@ -112,14 +121,16 @@ export const InnocentVesselModal: React.FC<InnocentVesselModalProps> = ({
 
           {!robbing ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={onOpenTrade}
-                className="sm:col-span-2 p-3.5 rounded bg-[#c99d4e] hover:bg-[#dfb261] text-[#14100b] text-sm font-bold flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Coins className="w-4 h-4" />
-                <span>Trade Cargo &amp; Crew</span>
-              </button>
+              {merchant.canTrade !== false && (
+                <button
+                  type="button"
+                  onClick={onOpenTrade}
+                  className="sm:col-span-2 p-3.5 rounded bg-[#c99d4e] hover:bg-[#dfb261] text-[#14100b] text-sm font-bold flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Coins className="w-4 h-4" />
+                  <span>Trade Cargo &amp; Crew</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -432,17 +443,19 @@ export const SeaMonsterModal: React.FC<SeaMonsterModalProps> = ({
         </div>
 
         <p className="text-sm text-[#d6cbb6] leading-relaxed">
-          {monster.alignment === 'good'
-            ? 'A noble guardian of open waters — only attacks captains stained by severe piracy.'
-            : monster.alignment === 'evil'
-              ? 'An aggressive predator of the deep that hunts honorable vessels and ships nearby.'
-              : 'A curious abyssal creature patrolling these waters.'}{' '}
+          {spec.behaviorSummary}{' '}
           {monster.size === 'small'
-            ? 'Small enough to be fed Provisions and tamed as a loyal escort!'
-            : 'Far too massive to tame.'}
+            ? `Small enough to be fed Provisions and tamed as a loyal escort (${spec.tameAbility}).`
+            : 'Far too massive to tame — if slain, fish beside its floating carcass for huge Provisions & Salt.'}
         </p>
 
         <div className="p-3.5 rounded bg-[#101922] border border-[#c99d4e]/20 space-y-2 text-xs">
+          <div className="flex justify-between">
+            <span className="text-[#a89c86]">Attack Method</span>
+            <span className="font-semibold text-[#efc570]">
+              {spec.attackStyle === 'tentacles' ? 'Tentacle Lash & Rigging Slam' : 'Hull Ram & Jaw Bite'}
+            </span>
+          </div>
           <div className="flex justify-between">
             <span className="text-[#a89c86]">Vitality</span>
             <span className="font-mono-num font-bold text-[#f7efe0]">

@@ -47,6 +47,8 @@ import {
 import {
   computePirateAI,
   computeAutoCombatStats,
+  decideFriendlyAssistance,
+  decideUnarmedOrTrawlerBehavior,
   generateGhostShip,
   generatePirateShip,
   resolveEnemyVolley,
@@ -54,6 +56,7 @@ import {
   resolvePlayerVolley,
   resolveShipCollision,
   rollEnemySalvageable,
+  shouldPirateAttemptRam,
 } from './combat';
 import { generateWorldChunk, mulberry32 } from './worldGen';
 import { addJournalEntry, createNewVoyage, deleteJournalEntry, loadVoyageFromStorage, updateJournalEntry } from './storage';
@@ -111,12 +114,13 @@ test('shipwrecks generate varying randomized gold amounts and never drop free ca
   assert.ok(treasGold >= 950, `treasure wreck gold ${treasGold} high`);
 });
 
-test('fishing trawlers strictly only sell food and water while blocking materials & ordnance', () => {
+test('fishing trawlers strictly only sell food, water, and sea salt while blocking materials & ordnance', () => {
   const rand = mulberry32(314);
   const trawler = generateMerchantShip('fish_1', 100, 100, 'fishing_trawler', rand);
   assert.equal(trawler.isFishingTrawler, true);
   assert.ok(trawler.stock.food > 0);
   assert.ok(trawler.stock.water > 0);
+  assert.ok(trawler.stock.salt > 0);
   assert.equal(trawler.stock.wood, 0);
   assert.equal(trawler.stock.iron, 0);
   assert.equal(trawler.stock.gunpowder, 0);
@@ -126,6 +130,9 @@ test('fishing trawlers strictly only sell food and water while blocking material
 
   const foodBuy = executeTrade('buy', 'food', 5, 500, inv, upgrades, trawler, 0);
   assert.equal(foodBuy.ok, true);
+
+  const saltBuy = executeTrade('buy', 'salt', 2, 500, inv, upgrades, trawler, 0);
+  assert.equal(saltBuy.ok, true);
 
   const woodSellAttempt = executeTrade('sell', 'wood', 2, 500, inv, upgrades, trawler, 0);
   assert.equal(woodSellAttempt.ok, false);
@@ -595,4 +602,672 @@ test('crew recruitment offer has 50% refusal when asked vs 100% guarantee when f
   const charredCargo = totalCargo(charredWreck);
   assert.ok(charredCargo < intactCargo * 0.75, `charred cargo ${charredCargo} less than intact ${intactCargo}`);
 });
+
+test('ramming physics reward speed advantage, protect light scrapes, recoil faster hulls, and damage sterns cleanly', () => {
+  // Fast rammer hits slower stationary ship bow-on
+  const fastRam = resolveShipCollision(
+    0,
+    0,
+    0,
+    -11,
+    6,
+    2.5,
+    1.0,
+    0,
+    -9,
+    0,
+    0,
+    6,
+    2.5,
+    1.0,
+    { aHeading: 0, bHeading: 0 }
+  );
+  assert.equal(fastRam.collided, true);
+  assert.equal(fastRam.isLightScrape, false);
+  assert.ok(fastRam.damageB > fastRam.damageA, `faster rammer deals ${fastRam.damageB} > takes ${fastRam.damageA}`);
+  assert.ok(fastRam.knockbackSpeedA < 0, 'ship A recoils backward after ramming');
+  assert.equal(fastRam.hitSectionB, 'steering', 'striking ship B from behind damages steering');
+
+  // Light oblique grazing scrape deals minimal damage and marks isLightScrape
+  const lightScrape = resolveShipCollision(
+    0,
+    0,
+    -1.2,
+    -4.0,
+    6,
+    2.0,
+    1.0,
+    -10.5,
+    0,
+    0,
+    -3.8,
+    6,
+    2.0,
+    1.0,
+    { aHeading: 0, bHeading: 0 }
+  );
+  assert.equal(lightScrape.collided, true);
+  assert.equal(lightScrape.isLightScrape, true);
+  assert.ok(lightScrape.damageA <= 2 && lightScrape.damageB <= 2, 'light scrape deals very little damage');
+
+  // Solid rock reef hazard collision (mass 999 takes 0 damage)
+  const rockHit = resolveShipCollision(0, 0, 0, -9, 6, 2.0, 1.0, 0, -10, 0, 0, 7, 999, 1.0);
+  assert.equal(rockHit.collided, true);
+  assert.equal(rockHit.damageB, 0);
+  assert.ok(rockHit.damageA >= 4);
+});
+
+test('AI intelligence tiers, multi-enemy surrounding, situational ramming, unarmed traders/trawlers, and friendly assistance work as designed', () => {
+  const rand = mulberry32(8080);
+
+  // Heavier tactical/veteran ship situationally attempts ram when player is smaller or injured
+  const veteranGalleon = {
+    ...generatePirateShip('vet_gal', 0, -65, 'galleon', rand, { rank: 5 }),
+    aiIntelligence: 'veteran' as const,
+    ramCooldown: 0,
+    ramCommitTimer: 0,
+  };
+  assert.equal(shouldPirateAttemptRam(veteranGalleon, 2, 65, { playerHullPct: 60, simTime: 10 }), true);
+
+  // Unarmed / zero-cannon pirate tries desperate ram in close range
+  const disarmedSloop = {
+    ...generatePirateShip('dis_sloop', 0, -45, 'sloop', rand),
+    cannons: 0,
+  };
+  assert.equal(shouldPirateAttemptRam(disarmedSloop, 3, 45), true);
+
+  // Basic AI chases directly vs Tactical/Veteran AI spreads across squad slots to surround player
+  const basicSloop = { ...generatePirateShip('basic_p', 0, 120, 'sloop', rand), aiIntelligence: 'basic' as const };
+  const basicMove = computePirateAI(basicSloop, 0, 0, 2, true, 0.1, 0, 0, false, false, null, { squadIndex: 0, squadCount: 2 });
+  assert.ok(basicMove.nextBehavior === 'pursue' || basicMove.nextBehavior === 'broadside');
+
+  const tacA = computePirateAI(
+    { ...veteranGalleon, x: 110, z: 0, ramCooldown: 20 },
+    0,
+    0,
+    4,
+    true,
+    0.1,
+    0,
+    0,
+    false,
+    false,
+    null,
+    { squadIndex: 0, squadCount: 2, playerHullPct: 100 }
+  );
+  const tacB = computePirateAI(
+    { ...veteranGalleon, x: 110, z: 0, ramCooldown: 20 },
+    0,
+    0,
+    4,
+    true,
+    0.1,
+    0,
+    0,
+    false,
+    false,
+    null,
+    { squadIndex: 1, squadCount: 2, playerHullPct: 100 }
+  );
+  assert.notEqual(tacA.targetHeading, tacB.targetHeading, 'multi-enemy squad ships spread headings to surround');
+
+  // Unarmed traders & trawlers exist with varied temperaments and desperate ram fallback
+  let sawUnarmedMerchant = false;
+  for (let i = 0; i < 40; i++) {
+    const m = generateMerchantShip(`tr_${i}`, 300, 300, 'small_merchant', mulberry32(i + 50));
+    if (m.cannons === 0) sawUnarmedMerchant = true;
+  }
+  assert.equal(sawUnarmedMerchant, true, 'some civilian traders spawn with no cannons');
+
+  const corneredBoldTrader = {
+    ...generateMerchantShip('bold_tr', 100, 100, 'fishing_boat', mulberry32(7)),
+    cannons: 0,
+    temperament: 'bold' as const,
+    desperateRamCooldown: 0,
+    hull: 22,
+    maxHull: 55,
+  };
+  assert.equal(decideUnarmedOrTrawlerBehavior(corneredBoldTrader, 52, 8, 5), 'desperate_ram');
+  const timidTrawler = {
+    ...generateMerchantShip('timid_tr', 100, 100, 'fishing_trawler', mulberry32(8)),
+    cannons: 0,
+    temperament: 'timid' as const,
+  };
+  assert.equal(decideUnarmedOrTrawlerBehavior(timidTrawler, 150, 5, 5), 'flee');
+
+  // Friendly AI assistance obeys reputation & faction ties
+  const crown = generateMerchantShip('crown_help', 0, 0, 'crown_frigate', mulberry32(11));
+  const outlawCrownAssist = decideFriendlyAssistance({ kind: 'merchant', ship: crown }, false, -60, 1, () => 0.01);
+  assert.equal(outlawCrownAssist.assists, false, 'Crown refuses to assist feared outlaws');
+
+  const heroCrownAssist = decideFriendlyAssistance({ kind: 'merchant', ship: crown }, false, 75, 1, () => 0.2);
+  assert.equal(heroCrownAssist.assists, true, 'Crown assists honored captains probabilistically');
+
+  const pirAlly = generatePirateShip('pir_help', 0, 0, 'brigantine', mulberry32(12), { factionId: 'crimson_corsairs' });
+  const evilPirateAssist = decideFriendlyAssistance({ kind: 'pirate', ship: pirAlly }, true, -65, 1, () => 0.25);
+  assert.equal(evilPirateAssist.assists, true, 'friendly pirates readily assist evil-rep players');
+});
+
+test('world chunks spawn solid rock/reef hazards safely away from origin', () => {
+  let rockCount = 0;
+  for (let cx = -3; cx <= 3; cx++) {
+    for (let cz = -3; cz <= 3; cz++) {
+      const chunk = generateWorldChunk(42, cx, cz, new Set(), new Set(), new Set());
+      for (const rk of chunk.rocks) {
+        rockCount++;
+        assert.ok(Math.hypot(rk.x, rk.z) >= 150, 'rocks stay clear of starter spawn');
+      }
+    }
+  }
+  assert.ok(rockCount >= 4, `world generates solid sea rock hazards (${rockCount})`);
+});
+
+import { getOceanBiome } from './biomes';
+import {
+  buildProceduralIsland,
+  resolveShipIslandCoastCollision,
+  sampleIslandTerrainHeight,
+} from './islands';
+import { populateColdIslandIceCollar } from './worldGen';
+import { resolveBreakableIceSheetCollision } from './combat';
+import { convertFishToProvisions, stepCrewFishing } from './fishing';
+import { addTreasureFragments, digTreasureSpot } from './treasure';
+import { getMonsterProvisionDrop, stepMonsterChaseBehavior } from './monsters';
+import { computeExactFleetMotion } from './fleet';
+import {
+  createInitialFpsWeaponState,
+  createWildlifeActor,
+  damageIslandPirateGuard,
+  fireFpsWeapon,
+  harvestWildlifeActor,
+  isDiscoveryChestGuarded,
+  lootIslandPirateGuard,
+  resolveExplorerDeath,
+  selectFpsWeapon,
+  startFpsReload,
+  stepFpsMouseDelta,
+  stepFpsReload,
+  stepIslandPirateGuard,
+} from './fpsCombat';
+
+test('valuable cargo ~40% price cut, exact fleet speed sync, and extreme sea monster provisions & species chases', () => {
+  // ~40% price reduction while preserving anti-arbitrage
+  assert.ok(RESOURCE_DEFS.cargo.basePrice <= 28, 'base cargo price cut ~40%');
+  assert.ok(RESOURCE_DEFS.jewellery.basePrice <= 76, 'jewellery price cut ~40%');
+  assert.ok(RESOURCE_DEFS.rareImports.basePrice <= 75, 'rare imports price cut ~40%');
+  const merch = generateMerchantShip('m_price_chk', 100, 100, 'wealthy_trader', mulberry32(41));
+  for (const vc of VALUABLE_CARGO_IDS) {
+    assert.ok(
+      getMerchantSellPrice(merch, vc, 25) < getMerchantBuyPrice(merch, vc, 25),
+      `anti-arbitrage preserved for ${vc}`
+    );
+  }
+
+  // Exact fleet speed & throttle match
+  const fl = createFleetShip('fl_sync', 'medium_armed', 0, 0, 0, 0, mulberry32(12));
+  assert.equal(computeExactFleetMotion(fl, 8.4, 0.75, 5, false), 8.4, 'escort matches flagship speed exactly');
+  assert.equal(computeExactFleetMotion(fl, 0.1, 0, 4, false), 0, 'escort stops when flagship is stopped');
+  assert.ok(computeExactFleetMotion(fl, 8.4, 0.75, 45, false) > 8.4, 'lagging escort catches up smoothly');
+  assert.equal(computeExactFleetMotion({ ...fl, command: 'hold' }, 10, 1, 50, false), 0, 'hold stays anchored');
+
+  // Extreme monster provisions & species-varied chase behavior
+  assert.equal(getMonsterProvisionDrop('small'), 90);
+  assert.equal(getMonsterProvisionDrop('medium'), 170);
+  assert.equal(getMonsterProvisionDrop('large'), 265);
+  assert.equal(getMonsterProvisionDrop('legendary'), 380);
+
+  const shark = { ...generateSeaMonster('shk', 0, 0, mulberry32(5)), species: 'shark' as const };
+  const serpent = { ...generateSeaMonster('srp', 0, 0, mulberry32(6)), species: 'serpent' as const };
+  const kraken = { ...generateSeaMonster('krk', 0, 0, mulberry32(7)), species: 'kraken' as const };
+  const sMove = stepMonsterChaseBehavior(shark, 0, -40, 0, -4, 40, 2.0);
+  const wMove = stepMonsterChaseBehavior(serpent, 0, -80, 0, -4, 80, 2.0);
+  const kAmbush = stepMonsterChaseBehavior(kraken, 0, -45, 0, -2, 45, 2.0);
+  assert.notEqual(wMove.targetHeading, sMove.targetHeading, 'serpent weaves while shark intercepts');
+  assert.ok(kAmbush.isLunging && kAmbush.ramDamageMultiplier > 1.4, 'kraken surges at ambush distance');
+});
+
+test('ocean biomes, starter island Coral Haven, breakable ice sheets, fishing converter, treasure fragments, and FPS reload state', () => {
+  // Biomes & islands
+  assert.equal(getOceanBiome(0, 0, 42), 'temperate');
+  assert.equal(getOceanBiome(285, 130, 42), 'tropical');
+  assert.equal(getOceanBiome(0, -1000, 42), 'cold');
+
+  const starterChunk = generateWorldChunk(42, 0, 0, new Set(), new Set(), new Set());
+  const coralHaven = starterChunk.islands.find((i) => i.name === 'Coral Haven');
+  assert.ok(coralHaven, 'starter Coral Haven island spawns near origin');
+  assert.ok(sampleIslandTerrainHeight(coralHaven!, coralHaven!.x, coralHaven!.z) > 1.5, 'island center above sea level');
+  assert.ok(sampleIslandTerrainHeight(coralHaven!, coralHaven!.x + 250, coralHaven!.z) < 0, 'open ocean below sea level');
+
+  // Breakable ice sheet: Tier 5 heavy ship breaks thin sheet while slow Tier 1 only cracks it
+  const sheet = {
+    id: 'ice_1',
+    x: 0,
+    z: -900,
+    radius: 16,
+    thickness: 1 as const,
+    hp: 40,
+    maxHp: 40,
+    crackStage: 0 as const,
+    broken: false,
+    rotation: 0,
+  };
+  const weakBump = resolveBreakableIceSheetCollision(2.2, 1.0, 1, sheet.hp, sheet.maxHp, sheet.thickness);
+  assert.equal(weakBump.shattered, false);
+  assert.ok(weakBump.newCrackStage >= 1, 'light hit visibly cracks ice sheet');
+  const heavyRam = resolveBreakableIceSheetCollision(11.5, 3.2, 5, sheet.hp, sheet.maxHp, sheet.thickness);
+  assert.equal(heavyRam.shattered, true, 'heavy fast ship shatters thin ice sheet');
+
+  // Fishing crew + converter
+  const voyage = createNewVoyage(55);
+  voyage.player.crew[0].role = 'fisherman';
+  voyage.player.upgrades.fishingGear = 'basic_lines';
+  voyage.player.speed = 4.5;
+  const fishRes = stepCrewFishing(voyage, 'tropical', 30, 0, mulberry32(9));
+  assert.ok(fishRes.caughtRegular + fishRes.caughtRare >= 1, 'fisherman + gear catch fish');
+  const invBeforeFood = voyage.player.inventory.food;
+  voyage.player.inventory.fishCatch = 2;
+  voyage.player.inventory.rareFish = 1;
+  const conv = convertFishToProvisions(voyage.player.inventory, 2, 1);
+  assert.equal(conv.foodAdded, 12, '2 regular (6) + 1 rare (6) = 12 food');
+  assert.equal(voyage.player.inventory.food, invBeforeFood + 12);
+
+  // Treasure fragments -> 3 bind a complete map -> dig completes
+  const fragAdd1 = addTreasureFragments(voyage, 2, [coralHaven!], mulberry32(10));
+  assert.equal(fragAdd1.newFragmentsCount, 2);
+  assert.equal(fragAdd1.assembledMaps.length, 0);
+  const fragAdd2 = addTreasureFragments(voyage, 2, [coralHaven!], mulberry32(11));
+  assert.equal(fragAdd2.assembledMaps.length, 1);
+  assert.equal(fragAdd2.newFragmentsCount, 1);
+  const map = fragAdd2.assembledMaps[0];
+  const goldBefore = voyage.player.gold;
+  const dug = digTreasureSpot(voyage, map.id);
+  assert.equal(dug.success, true);
+  assert.equal(map.found, true);
+  assert.ok(voyage.player.gold > goldBefore);
+
+  // FPS weapons: unloaded state & paused reload strictly persist across weapon swaps
+  let fpsState = createInitialFpsWeaponState();
+  fpsState = selectFpsWeapon(fpsState, 'pistol');
+  const shot = fireFpsWeapon(fpsState);
+  assert.equal(shot.fired, true);
+  assert.equal(shot.state.pistolLoaded, false);
+  // Attempting to fire again without reloading does NOT auto-reload
+  const dryFire = fireFpsWeapon(shot.state);
+  assert.equal(dryFire.fired, false);
+  assert.equal(dryFire.needsReload, true);
+
+  // Start reload, advance 0.5s, swap away to cutlass, then back to pistol -> still unloaded with paused remaining time
+  const reloadStart = startFpsReload(shot.state, { gunpowder: 10, leadShot: 10 });
+  assert.equal(reloadStart.started, true);
+  const midReload = stepFpsReload(reloadStart.state, 0.5, voyage.player.inventory);
+  assert.equal(midReload.finishedWeapon, null);
+  const swappedCutlass = selectFpsWeapon(midReload.state, 'cutlass');
+  assert.equal(swappedCutlass.pistolLoaded, false);
+  assert.equal(swappedCutlass.isReloading, false);
+  const swappedBackPistol = selectFpsWeapon(swappedCutlass, 'pistol');
+  assert.equal(swappedBackPistol.pistolLoaded, false);
+  assert.ok(swappedBackPistol.pistolReloadRemaining > 0.9 && swappedBackPistol.pistolReloadRemaining < 1.2);
+
+  // Complete reload -> consumes 1 gunpowder + 1 leadShot
+  const pwBefore = voyage.player.inventory.gunpowder;
+  const lsBefore = voyage.player.inventory.leadShot;
+  const resumed = startFpsReload(swappedBackPistol, voyage.player.inventory);
+  const finished = stepFpsReload(resumed.state, 1.5, voyage.player.inventory);
+  assert.equal(finished.finishedWeapon, 'pistol');
+  assert.equal(finished.state.pistolLoaded, true);
+  assert.equal(voyage.player.inventory.gunpowder, pwBefore - 1);
+  assert.equal(voyage.player.inventory.leadShot, lsBefore - 1);
+});
+
+test('larger flatter islands, solid coastline collisions, cold island ice collars, wildlife sail cloth + provisions, pirate chest guards, and explorer death', () => {
+  // 1. Coral Haven is enlarged (>= 88 radius), flatter (<= 8.0 maxHeight), and blocks side entry while allowing pier approach
+  const starterChunk = generateWorldChunk(42, 0, 0, new Set(), new Set(), new Set());
+  const coralHaven = starterChunk.islands.find((i) => i.name === 'Coral Haven')!;
+  assert.ok(coralHaven.radius >= 88, 'Coral Haven radius enlarged');
+  assert.ok(coralHaven.maxHeight <= 8.0, 'Coral Haven maxHeight flattened');
+
+  // Side impact pushes ship safely outside solid coastline
+  const sideImpact = resolveShipIslandCoastCollision(coralHaven, coralHaven.x + 25, coralHaven.z + 25, 7);
+  assert.equal(sideImpact.collided, true);
+  assert.ok(Math.hypot(sideImpact.nextX - coralHaven.x, sideImpact.nextZ - coralHaven.z) >= coralHaven.radius * 0.9);
+
+  // Far offshore is clear
+  const clearSea = resolveShipIslandCoastCollision(coralHaven, coralHaven.x - 140, coralHaven.z, 7);
+  assert.equal(clearSea.collided, false);
+
+  // 2. Cold islands generate a full collar of mixed thin & medium breakable ice sheets; tropical do not
+  const tropCollar: ReturnType<typeof generateWorldChunk>['iceSheets'] = [];
+  populateColdIslandIceCollar(coralHaven, mulberry32(19), tropCollar);
+  assert.equal(tropCollar.length, 0);
+
+  const coldIsland = buildProceduralIsland('cold_test', 365, -835, 42, mulberry32(23));
+  assert.equal(coldIsland.biome, 'cold');
+  const coldCollar: ReturnType<typeof generateWorldChunk>['iceSheets'] = [];
+  populateColdIslandIceCollar(coldIsland, mulberry32(29), coldCollar);
+  assert.ok(coldCollar.length >= 8, 'cold island ringed by breakable ice sheets');
+  assert.ok(coldCollar.some((s) => s.thickness === 1), 'collar includes thin ice sheets');
+  assert.ok(coldCollar.some((s) => s.thickness === 2), 'collar includes medium ice sheets');
+
+  // 3. Harvesting animals yields BOTH Sail Cloth (cloth) & Provisions (food)
+  const boar = createWildlifeActor('boar_test', 'boar', 10, 1, 10, mulberry32(31), coralHaven.id);
+  boar.dead = true;
+  const invVoyage = createNewVoyage(77);
+  const clothBefore = invVoyage.player.inventory.cloth;
+  const foodBefore = invVoyage.player.inventory.food;
+  const hv = harvestWildlifeActor(boar, invVoyage.player.inventory);
+  assert.equal(hv.harvested, true);
+  assert.ok(hv.clothAdded >= 1, 'harvesting animal yields Sail Cloth');
+  assert.ok(hv.foodAdded >= 4, 'harvesting animal yields Provisions');
+  assert.equal(invVoyage.player.inventory.cloth, clothBefore + hv.clothAdded);
+  assert.equal(invVoyage.player.inventory.food, foodBefore + hv.foodAdded);
+
+  // 4. Guarded pirate chest & mixed cutlass/pistol pirate guards
+  const guards = coralHaven.pirateGuards ?? [];
+  const pirateChest = coralHaven.discoveries.find((d) => d.kind === 'pirate_chest');
+  assert.ok(pirateChest, 'Coral Haven spawns a pirate treasure chest');
+  assert.ok(guards.length >= 2, 'pirate chest is defended by multiple pirate guards');
+  assert.ok(guards.some((g) => g.role === 'cutlass'), 'has cutlass buccaneer guard');
+  assert.ok(guards.some((g) => g.role === 'pistol'), 'has flintlock pistol corsair guard');
+
+  // Locked while guards live
+  assert.equal(isDiscoveryChestGuarded(pirateChest!, guards).guarded, true);
+
+  // Pistol guard can fire from medium distance; cutlass guard closes into melee
+  const pistolGuard = guards.find((g) => g.role === 'pistol')!;
+  pistolGuard.reloadTimer = 0;
+  pistolGuard.attackCooldown = 0;
+  const pistolStep = stepIslandPirateGuard(pistolGuard, pistolGuard.x + 12, pistolGuard.z, false, 0.2);
+  assert.ok(pistolStep.rangedShotDamage > 0 && pistolStep.rangedFired, 'pistol guard fires flintlock from range');
+
+  // Defeat all guards -> chest unlocks & defeated guards can be looted
+  for (const g of guards) {
+    damageIslandPirateGuard(g, 500);
+    assert.equal(g.dead, true);
+  }
+  assert.equal(isDiscoveryChestGuarded(pirateChest!, guards).guarded, false);
+  const goldPreLoot = invVoyage.player.gold;
+  const lootG = lootIslandPirateGuard(guards[0], invVoyage);
+  assert.equal(lootG.looted, true);
+  assert.ok(invVoyage.player.gold > goldPreLoot);
+
+  // 5. Explorer death removes 1 crew member and says "Your explorer died"
+  const crewPreDeath = invVoyage.player.crew.length;
+  const death = resolveExplorerDeath(invVoyage);
+  assert.equal(invVoyage.player.crew.length, crewPreDeath - 1);
+  assert.ok(death.message.includes('Your explorer died'));
+});
+
+import { SALT_SPOILAGE_MULT } from './survival';
+import {
+  chooseBountyTargetKind,
+  computeBountyLocatorMetrics,
+  createBountyContract,
+  getBountyRewardAndRep,
+  resolveBountyHunterClaim,
+  resolveBountyKillByPlayer,
+} from './bounty';
+import { PIRATE_MUSIC_TRACKS, pickNextRandomTrackIndex } from '../audio/soundEngine';
+
+test('salt starts scarce, drains gradually, accelerates food spoilage at 0, and is stocked by trawlers/merchants', () => {
+  const startInv = createStartingInventory();
+  assert.equal(startInv.salt, 12, 'player starts with limited salt');
+
+  const voyage = createNewVoyage(606);
+  const supplyDays = computeSupplyDaysRemaining(voyage.player.inventory, voyage.player.crew.length);
+  assert.ok(supplyDays.saltDays > 0.5 && supplyDays.saltDays < 5, `initial saltDays reasonable (${supplyDays.saltDays})`);
+
+  const saltedStep = stepSurvivalAndRepairs(
+    10,
+    { ...voyage.player.inventory, food: 80, salt: 12 },
+    voyage.player.crew,
+    voyage.player.condition,
+    voyage.player.upgrades,
+    null,
+    voyage.weather,
+    mulberry32(1)
+  );
+  assert.ok(saltedStep.inventory.salt < 12, 'salt depletes while preserving food');
+
+  const unsaltedStep = stepSurvivalAndRepairs(
+    10,
+    { ...voyage.player.inventory, food: 80, salt: 0 },
+    voyage.player.crew,
+    voyage.player.condition,
+    voyage.player.upgrades,
+    null,
+    voyage.weather,
+    mulberry32(1)
+  );
+  const saltedLoss = 80 - saltedStep.inventory.food;
+  const unsaltedLoss = 80 - unsaltedStep.inventory.food;
+  assert.ok(
+    Math.abs(unsaltedLoss / saltedLoss - SALT_SPOILAGE_MULT) < 0.05,
+    `unsalted food spoils at ~${SALT_SPOILAGE_MULT}x rate (${unsaltedLoss.toFixed(3)} vs ${saltedLoss.toFixed(3)})`
+  );
+});
+
+test('most Crown fighting warships refuse trade while crown_supply trades and rare exceptions exist', () => {
+  let crownNonTrading = 0;
+  for (let i = 0; i < 60; i++) {
+    const crownFrigate = generateMerchantShip(`cr_${i}`, 200, 200, 'crown_frigate', mulberry32(i + 1000));
+    if (crownFrigate.canTrade === false) crownNonTrading++;
+  }
+  assert.ok(crownNonTrading >= 38, `most Crown warships refuse trade (${crownNonTrading}/60)`);
+
+  const crownSupply = generateMerchantShip('cr_sup', 200, 200, 'crown_supply', mulberry32(55));
+  assert.equal(crownSupply.canTrade, true, 'Crown supply ships always trade');
+
+  const combatOnlyCrown = {
+    ...generateMerchantShip('cr_fight', 200, 200, 'crown_warship', mulberry32(7)),
+    canTrade: false,
+  };
+  const policy = getMerchantReputationBehavior(80, true, combatOnlyCrown);
+  assert.equal(policy.willTrade, false, 'non-trading Crown fighting ship blocks trade even at +80 rep');
+});
+
+test('reputation-driven bounty contracts, locator bearing math, scaled rewards, and rival hunter claims work accurately', () => {
+  assert.equal(chooseBountyTargetKind(25), 'pirate');
+  assert.equal(chooseBountyTargetKind(0), 'pirate');
+  assert.equal(chooseBountyTargetKind(-1), 'crown');
+  assert.equal(chooseBountyTargetKind(-60), 'crown');
+
+  const goodContract = createBountyContract('b1', 40, 4, 2, mulberry32(11)).contract;
+  assert.equal(goodContract.targetKind, 'pirate');
+  assert.ok(goodContract.reputationDelta > 0, 'pirate bounty grants positive reputation');
+
+  const evilContract = createBountyContract('b2', -45, 5, 3, mulberry32(22)).contract;
+  assert.equal(evilContract.targetKind, 'crown');
+  assert.ok(evilContract.reputationDelta < 0, 'Crown bounty lowers reputation further');
+
+  const petty = getBountyRewardAndRep('pirate', 'petty', mulberry32(5));
+  const legendary = getBountyRewardAndRep('pirate', 'legendary', mulberry32(5));
+  assert.ok(legendary.rewardGold > petty.rewardGold * 2.5, 'stronger bounties pay much higher gold');
+
+  const killWin = resolveBountyKillByPlayer(goodContract, 100, 40);
+  assert.equal(killWin.contract.status, 'claimed_player');
+  assert.equal(killWin.gold, 100 + goodContract.rewardGold);
+  assert.equal(killWin.reputation, 40 + goodContract.reputationDelta);
+
+  const rivalWin = resolveBountyHunterClaim(goodContract, 'HMS Pursuit', 100);
+  assert.equal(rivalWin.contract.status, 'claimed_rival');
+  assert.equal(rivalWin.gold, 100, 'rival hunter kill awards player 0 bounty gold');
+
+  // Locator math: heading 0 faces North (-Z)
+  const ahead = computeBountyLocatorMetrics(0, 0, 0, 0, -250);
+  assert.equal(ahead.distance, 250);
+  assert.equal(ahead.relBearingDeg, 0);
+  assert.equal(ahead.directionLabel, 'Dead Ahead');
+
+  const starboard = computeBountyLocatorMetrics(0, 0, 0, 300, 0);
+  assert.equal(starboard.relBearingDeg, 90);
+  assert.equal(starboard.directionLabel, 'Starboard Beam');
+
+  const port = computeBountyLocatorMetrics(0, 0, 0, -300, 0);
+  assert.equal(port.relBearingDeg, -90);
+  assert.equal(port.directionLabel, 'Port Beam');
+});
+
+test('pirate MP3 soundtrack playlist shuffles all 6 tracks and never plays the same song twice in a row', () => {
+  assert.equal(PIRATE_MUSIC_TRACKS.length, 6);
+  const rand = mulberry32(2027);
+  let prev = -1;
+  const seen = new Set<number>();
+  for (let i = 0; i < 240; i++) {
+    const next = pickNextRandomTrackIndex(PIRATE_MUSIC_TRACKS.length, prev, rand);
+    assert.ok(next >= 0 && next < PIRATE_MUSIC_TRACKS.length);
+    if (prev !== -1) {
+      assert.notEqual(next, prev, `track ${next} must differ from immediately preceding track ${prev}`);
+    }
+    seen.add(next);
+    prev = next;
+  }
+  assert.equal(seen.size, PIRATE_MUSIC_TRACKS.length, 'all 6 pirate tracks are reachable');
+});
+
+test('FPS mouse delta handler skips post-lock spikes and off-screen cursor jumps', () => {
+  // Initial 2 events after pointer lock transition are discarded cleanly
+  let st = { lastX: -1, lastY: -1, skipEvents: 2 };
+  const skip1 = stepFpsMouseDelta(st, { locked: true, clientX: 640, clientY: 400, movementX: 450, movementY: -220 });
+  assert.equal(skip1.dx, 0);
+  assert.equal(skip1.dy, 0);
+  st = skip1.nextState;
+
+  const skip2 = stepFpsMouseDelta(st, { locked: true, clientX: 640, clientY: 400, movementX: -300, movementY: 180 });
+  assert.equal(skip2.dx, 0);
+  assert.equal(skip2.dy, 0);
+  st = skip2.nextState;
+
+  // Normal locked mouse look passes through smoothly
+  const normal = stepFpsMouseDelta(st, { locked: true, clientX: 640, clientY: 400, movementX: 24, movementY: -12 });
+  assert.equal(normal.dx, 24);
+  assert.equal(normal.dy, -12);
+  st = normal.nextState;
+
+  // Bogus Chromium warp spike while locked is rejected cleanly
+  const spike = stepFpsMouseDelta(st, { locked: true, clientX: 640, clientY: 400, movementX: 390, movementY: 0 });
+  assert.equal(spike.dx, 0);
+  assert.equal(spike.dy, 0);
+
+  // Unlocked mode: leaving screen and re-entering across viewport is ignored
+  let uState = { lastX: 15, lastY: 400, skipEvents: 0 };
+  const edgeJump = stepFpsMouseDelta(uState, { locked: false, clientX: 1260, clientY: 400, movementX: 0, movementY: 0 });
+  assert.equal(edgeJump.dx, 0);
+  uState = edgeJump.nextState;
+  const unlockedMove = stepFpsMouseDelta(uState, { locked: false, clientX: 1240, clientY: 392, movementX: 0, movementY: 0 });
+  assert.equal(unlockedMove.dx, -20);
+  assert.equal(unlockedMove.dy, -8);
+});
+
+import { CHUNK_SIZE } from './worldGen';
+import { getMonsterAttackStyle, getMonsterSaltDrop, SEA_MONSTER_SPECS } from './monsters';
+import { fishNearMarineWildlife, fishNearMonsterCarcass } from './fishing';
+import { damageWildlifeActor } from './fpsCombat';
+
+test('ocean biomes cover temperate/tropical/cold/deep with normal most common and deep monster-only', () => {
+  const counts = { temperate: 0, tropical: 0, cold: 0, deep: 0 };
+  for (let gx = -5; gx <= 5; gx++) {
+    for (let gz = -5; gz <= 5; gz++) {
+      const b = getOceanBiome(gx * 320, gz * 320, 42);
+      counts[b]++;
+    }
+  }
+  assert.ok(counts.temperate > counts.tropical && counts.temperate > counts.cold && counts.temperate > counts.deep, 'Normal Ocean is most common');
+  assert.ok(counts.deep >= 1 && counts.tropical >= 1 && counts.cold >= 1, 'all 4 biomes spawn across world grid');
+
+  // Find a deep-ocean chunk and verify ONLY sea monsters spawn there
+  let deepChunkCoords: [number, number] | null = null;
+  for (let cx = -12; cx <= 12 && !deepChunkCoords; cx++) {
+    for (let cz = -12; cz <= 12; cz++) {
+      const midX = (cx + 0.5) * CHUNK_SIZE;
+      const midZ = (cz + 0.5) * CHUNK_SIZE;
+      if (getOceanBiome(midX, midZ, 42) === 'deep') {
+        deepChunkCoords = [cx, cz];
+        break;
+      }
+    }
+  }
+  assert.ok(deepChunkCoords, 'located a deep ocean chunk');
+  const dChunk = generateWorldChunk(42, deepChunkCoords![0], deepChunkCoords![1], new Set(), new Set(), new Set());
+  assert.equal(dChunk.biome, 'deep');
+  assert.equal(dChunk.islands.length, 0);
+  assert.equal(dChunk.merchants.length, 0);
+  assert.equal(dChunk.pirates.length, 0);
+  assert.equal(dChunk.wrecks.length, 0);
+  assert.equal(dChunk.rocks.length, 0);
+  assert.equal(dChunk.wildlife.length, 0);
+  assert.ok(dChunk.monsters.length >= 1, 'deep ocean spawns sea monsters only');
+
+  // Crew fishing yields nothing in Abyssal Deep
+  const voyage = createNewVoyage(91);
+  voyage.player.crew[0].role = 'fisherman';
+  voyage.player.upgrades.fishingGear = 'trawling_net';
+  voyage.player.speed = 6;
+  const deepFish = stepCrewFishing(voyage, 'deep', 60, 0, mulberry32(4));
+  assert.equal(deepFish.caughtRegular + deepFish.caughtRare, 0);
+});
+
+test('fishing near sea creatures & floating monster carcasses harvests provisions and salt; tentacle vs ram-bite & falling birds work', () => {
+  const voyage = createNewVoyage(104);
+  const foodBefore = voyage.player.inventory.food;
+  const saltBefore = voyage.player.inventory.salt;
+
+  // 1. Living sea wildlife fishing awards Food + Salt
+  const parrot = createWildlifeActor('pf_1', 'parrotfish', 20, 0, 20, mulberry32(12));
+  const pfRes = fishNearMarineWildlife(parrot, voyage.player.inventory);
+  assert.equal(pfRes.harvested, true);
+  assert.ok(pfRes.foodAdded > 0 && pfRes.saltAdded >= 1);
+  assert.equal(voyage.player.inventory.food, foodBefore + pfRes.foodAdded);
+  assert.equal(voyage.player.inventory.salt, saltBefore + pfRes.saltAdded);
+
+  // 2. Sea monster carcass floating harvest
+  const gk = generateSeaMonster('gk_1', 30, 30, mulberry32(88), true, 'deep');
+  gk.species = 'giant_kraken';
+  gk.defeated = true;
+  gk.carcassRemainingFood = getMonsterProvisionDrop('legendary');
+  gk.carcassRemainingSalt = getMonsterSaltDrop('legendary');
+  gk.carcassHarvested = false;
+  const monRes = fishNearMonsterCarcass(gk, voyage.player.inventory);
+  assert.equal(monRes.harvested, true);
+  assert.equal(monRes.foodAdded, 380);
+  assert.equal(monRes.saltAdded, 14);
+  assert.equal(gk.carcassHarvested, true);
+
+  // 3. Tentacle vs ram_bite styles and small-tier taming across all 9 species
+  assert.equal(getMonsterAttackStyle('giant_kraken'), 'tentacles');
+  assert.equal(getMonsterAttackStyle('leviathan_squid'), 'tentacles');
+  assert.equal(getMonsterAttackStyle('kraken'), 'tentacles');
+  assert.equal(getMonsterAttackStyle('mosasaur'), 'ram_bite');
+  assert.equal(getMonsterAttackStyle('frost_leviathan'), 'ram_bite');
+  assert.equal(getMonsterAttackStyle('shark'), 'ram_bite');
+  assert.ok(SEA_MONSTER_SPECS.giant_kraken.tameAbility.length > 0);
+
+  const smallMosa = {
+    ...generateSeaMonster('sm_mosa', 0, 0, mulberry32(33), false, 'tropical'),
+    species: 'mosasaur' as const,
+    size: 'small' as const,
+    provokedByPlayer: false,
+    tameRequiredFood: 4,
+    tameProgress: 0,
+  };
+  const tameStep = feedSeaMonsterToTame(smallMosa, voyage.player.inventory, 4);
+  assert.equal(tameStep.ok, true);
+  assert.equal(tameStep.monster.tamed, true);
+
+  // 4. Dead island seabird gets downward fall velocity; ocean flock bird cannot be killed
+  const islandGull = createWildlifeActor('gull_isl', 'seabird', 10, 8.5, 10, mulberry32(19), 'isl_1');
+  const gullHit = damageWildlifeActor(islandGull, 99);
+  assert.equal(gullHit.killed, true);
+  assert.ok((islandGull.vy ?? 0) < 0, 'killed seabird starts falling toward the ground');
+
+  const flockBird = createWildlifeActor('flock_1', 'ocean_flock_bird', 50, 15, 50, mulberry32(21));
+  assert.equal(flockBird.killable, false);
+  const flockHit = damageWildlifeActor(flockBird, 999);
+  assert.equal(flockHit.killed, false);
+  assert.equal(flockBird.dead, false);
+});
+
+
+
+
+
 

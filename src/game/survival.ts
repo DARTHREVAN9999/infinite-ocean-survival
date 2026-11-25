@@ -5,6 +5,7 @@ import {
   CrewRole,
   Inventory,
   ManualRepairJob,
+  RepairPriority,
   ShipCondition,
   ShipUpgrades,
   WeatherState,
@@ -19,6 +20,7 @@ export const CREW_ROLES: CrewRole[] = [
   'lookout',
   'navigator',
   'medical',
+  'fisherman',
   'general',
   'resting',
 ];
@@ -31,6 +33,7 @@ export const CREW_ROLE_LABELS: Record<CrewRole, string> = {
   lookout: 'Lookouts',
   navigator: 'Navigation Crew',
   medical: 'Medical Crew',
+  fisherman: 'Fishermen',
   general: 'General Crew',
   resting: 'Resting',
 };
@@ -86,6 +89,7 @@ export function createRandomCrewMember(
       repair: rollSkill(),
       navigation: rollSkill(),
       strength: rollSkill(),
+      fishing: rollSkill(),
     },
     coatColor: COAT_COLORS[Math.floor(rand() * COAT_COLORS.length)],
     hatStyle: HAT_STYLES[Math.floor(rand() * HAT_STYLES.length)],
@@ -116,6 +120,7 @@ export function getRoleCounts(crew: CrewMember[]): Record<CrewRole, number> {
     lookout: 0,
     navigator: 0,
     medical: 0,
+    fisherman: 0,
     general: 0,
     resting: 0,
   };
@@ -154,6 +159,8 @@ function scoreMemberForRole(m: CrewMember, role: CrewRole): number {
       return s.navigation * 1.5;
     case 'medical':
       return s.repair * 0.9 + s.navigation * 0.7;
+    case 'fisherman':
+      return (s.fishing ?? s.sailing) * 1.35 + s.strength * 0.4;
     case 'general':
       return (s.strength + s.sailing + s.repair + s.combat) * 0.4;
     case 'resting':
@@ -426,19 +433,24 @@ export function computeShipHandling(
 
 // 180 real seconds = 1 full 24h game day (0.1333 hours/sec)
 export const GAME_DAY_SECONDS = 180;
+export const SALT_RATE_PER_CREW = 0.0028;
+export const SALT_SPOILAGE_MULT = 1.85;
 
 export function computeSupplyDaysRemaining(
   inventory: Inventory,
   crewCount: number,
   weather?: WeatherState
-): { foodDays: number; waterDays: number } {
+): { foodDays: number; waterDays: number; saltDays: number } {
   const n = Math.max(1, crewCount);
   const waterMult = weather?.waterDrainMult ?? 1.0;
-  const foodPerDay = n * 0.011 * GAME_DAY_SECONDS;
+  const hasSalt = (inventory.salt || 0) > 0;
+  const foodPerDay = n * 0.011 * (hasSalt ? 1 : SALT_SPOILAGE_MULT) * GAME_DAY_SECONDS;
   const waterPerDay = n * 0.013 * waterMult * GAME_DAY_SECONDS;
+  const saltPerDay = n * SALT_RATE_PER_CREW * GAME_DAY_SECONDS;
   return {
     foodDays: Math.round(((inventory.food || 0) / foodPerDay) * 10) / 10,
     waterDays: Math.round(((inventory.water || 0) / waterPerDay) * 10) / 10,
+    saltDays: Math.round(((inventory.salt || 0) / saltPerDay) * 10) / 10,
   };
 }
 
@@ -461,6 +473,8 @@ function getPrimarySkillForRole(
     case 'lookout':
     case 'navigator':
       return 'navigation';
+    case 'fisherman':
+      return 'fishing';
     case 'general':
     default:
       return 'strength';
@@ -473,6 +487,7 @@ const SKILL_DISPLAY_NAME: Record<keyof CrewMember['skills'], string> = {
   repair: 'Repair',
   navigation: 'Navigation',
   strength: 'Strength',
+  fishing: 'Fishing',
 };
 
 export function applyXpToCrewMember(
@@ -494,8 +509,9 @@ export function applyXpToCrewMember(
     level += 1;
     leveledUp = true;
     const primary = getPrimarySkillForRole(member.role);
-    if (nextSkills[primary] < 12) {
-      nextSkills[primary] += 1;
+    const curVal = nextSkills[primary] ?? 3;
+    if (curVal < 12) {
+      nextSkills[primary] = curVal + 1;
       raisedSkillLabel = SKILL_DISPLAY_NAME[primary];
     } else if (nextSkills.strength < 12) {
       nextSkills.strength += 1;
@@ -540,7 +556,7 @@ export interface SurvivalTickResult {
   crew: CrewMember[];
   condition: ShipCondition;
   activeRepairJob: ManualRepairJob | null;
-  completedRepairSection: string | null;
+  completedRepairSection: RepairPriority | null;
   events: string[];
   levelUps: string[];
   casualties: string[];
@@ -570,7 +586,15 @@ export function stepSurvivalAndRepairs(
   const casualties: string[] = [];
   const escapedNames: string[] = [];
 
-  const foodNeed = crew.length * 0.011 * dt;
+  const prevSalt = nextInv.salt || 0;
+  const saltNeed = nextInv.food > 0 ? crew.length * SALT_RATE_PER_CREW * dt : 0;
+  nextInv.salt = Math.max(0, prevSalt - saltNeed);
+  const noSaltSpoilage = prevSalt <= 0 && nextInv.food > 0;
+  if (prevSalt > 0 && nextInv.salt <= 0 && nextInv.food > 0) {
+    events.push('Sea Salt exhausted! Without curing salt, provisions are spoiling nearly twice as fast.');
+  }
+
+  const foodNeed = crew.length * 0.011 * (noSaltSpoilage ? SALT_SPOILAGE_MULT : 1.0) * dt;
   const waterNeed = crew.length * 0.013 * (weather.waterDrainMult || 1.0) * dt;
 
   const starving = nextInv.food <= 0;
@@ -610,7 +634,7 @@ export function stepSurvivalAndRepairs(
 
   // STRICT MANUAL REPAIRS ONLY: advance activeRepairJob if player initiated one
   let nextRepairJob: ManualRepairJob | null = activeRepairJob ? { ...activeRepairJob } : null;
-  let completedRepairSection: string | null = null;
+  let completedRepairSection: RepairPriority | null = null;
   if (nextRepairJob) {
     nextRepairJob.remainingTime -= dt;
     if (nextRepairJob.remainingTime <= 0) {

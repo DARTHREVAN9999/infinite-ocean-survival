@@ -125,11 +125,69 @@ export const MapModal: React.FC<MapModalProps> = ({ save, onClose }) => {
         ctx.lineTo(sx - 7, sy);
         ctx.closePath();
         ctx.fill();
+      } else if (m.kind === 'island') {
+        ctx.fillStyle = '#3d8b68';
+        ctx.strokeStyle = '#d4b87c';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      } else if (m.kind === 'settlement') {
+        ctx.fillStyle = '#b45309';
+        ctx.strokeStyle = '#f7efe0';
+        ctx.lineWidth = 1.2;
+        ctx.fillRect(sx - 5, sy - 5, 10, 10);
+        ctx.strokeRect(sx - 5, sy - 5, 10, 10);
+      } else if (m.kind === 'treasure') {
+        ctx.strokeStyle = '#b91c1c';
+        ctx.lineWidth = 2.6;
+        ctx.beginPath();
+        ctx.moveTo(sx - 6, sy - 6);
+        ctx.lineTo(sx + 6, sy + 6);
+        ctx.moveTo(sx + 6, sy - 6);
+        ctx.lineTo(sx - 6, sy + 6);
+        ctx.stroke();
       }
+    }
 
-      ctx.fillStyle = '#2b1d11';
-      ctx.font = 'bold 11px "Plus Jakarta Sans", sans-serif';
-      ctx.fillText(m.name, sx + 9, sy + 4);
+    // Draw marker labels in a second pass with smart collision stagger + parchment halo
+    const placedLabelRects: Array<{ x: number; y: number; w: number; h: number }> = [];
+    ctx.font = 'bold 11px "Plus Jakarta Sans", sans-serif';
+    for (const m of save.markers) {
+      const sx = w * 0.5 + (m.x - save.player.x) * scale;
+      const sy = h * 0.5 + (m.z - save.player.z) * scale;
+      if (sx < -20 || sx > w + 20 || sy < -20 || sy > h + 20) continue;
+
+      const labelText = m.name.length > 22 ? `${m.name.slice(0, 20)}…` : m.name;
+      const textW = ctx.measureText(labelText).width;
+      const baseOffY = m.kind === 'island' ? -11 : 4;
+      const candidates = [baseOffY, baseOffY + 14, baseOffY - 14, baseOffY + 26];
+      let chosenY: number | null = null;
+      for (const oy of candidates) {
+        const lx = sx + 9;
+        const ly = sy + oy;
+        const overlaps = placedLabelRects.some(
+          (r) =>
+            lx < r.x + r.w + 4 &&
+            lx + textW + 4 > r.x &&
+            ly - 10 < r.y + r.h &&
+            ly + 2 > r.y - 10
+        );
+        if (!overlaps) {
+          chosenY = ly;
+          placedLabelRects.push({ x: lx, y: ly - 10, w: textW, h: 12 });
+          break;
+        }
+      }
+      if (chosenY === null) continue;
+
+      ctx.strokeStyle = '#efe2c5';
+      ctx.lineWidth = 3.2;
+      ctx.lineJoin = 'round';
+      ctx.strokeText(labelText, sx + 9, chosenY);
+      ctx.fillStyle = m.kind === 'treasure' ? '#991b1b' : '#2b1d11';
+      ctx.fillText(labelText, sx + 9, chosenY);
     }
 
     // Player vessel
@@ -211,6 +269,9 @@ export const MapModal: React.FC<MapModalProps> = ({ save, onClose }) => {
               <span className="text-[#c0392b]">✦ Major Battle</span>
               <span className="text-[#0e7490]">◈ Ghost Ship</span>
               <span className="text-[#12706b]">◆ Sea Beast</span>
+              <span className="text-[#3d8b68]">◉ Island</span>
+              <span className="text-[#b45309]">▣ Settlement</span>
+              <span className="text-[#b91c1c] font-bold">✕ Buried Treasure</span>
             </div>
           </div>
 

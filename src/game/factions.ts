@@ -360,6 +360,18 @@ export function getMerchantReputationBehavior(
     };
   }
 
+  if (merchant?.canTrade === false) {
+    return {
+      willTrade: false,
+      priceMultiplier: 1.4,
+      refusalReason: isCrown
+        ? `${merchant.name} is an active Crown fighting vessel and does not engage in private trade.`
+        : `${merchant.name} is not open for trade.`,
+      crownHuntsPlayer: isCrown && reputation <= -25,
+      canOfferCrownRepair: false,
+    };
+  }
+
   if (isCrown) {
     if (reputation <= -25) {
       return {
@@ -437,20 +449,23 @@ export function decideInnocentReaction(
 
   const hullRatio = vessel.hull / Math.max(1, vessel.maxHull);
   const vesselPower = vessel.cannons * 18 + vessel.crewCount * 3 + hullRatio * 35;
+  const temperament = vessel.temperament ?? (vessel.isCrown ? 'bold' : 'cautious');
 
   if (vessel.isCrown && hullRatio > 0.24) {
     return 'fight';
   }
   if (vessel.isFishingTrawler || vessel.cannons <= 0) {
-    return attackerStrength > vesselPower * 0.9 && rand() < 0.72 ? 'surrender' : 'flee';
+    const surrenderChance =
+      temperament === 'timid' ? 0.82 : temperament === 'cautious' ? 0.65 : 0.32;
+    return attackerStrength > vesselPower * 0.85 && rand() < surrenderChance ? 'surrender' : 'flee';
   }
   if (hullRatio < 0.32 || attackerStrength > vesselPower * 2.1) {
-    return rand() < 0.68 ? 'surrender' : 'flee';
+    return rand() < (temperament === 'bold' ? 0.45 : 0.72) ? 'surrender' : 'flee';
   }
-  if (vesselPower >= attackerStrength * 0.95) {
-    return rand() < 0.72 ? 'fight' : 'flee';
+  if (vesselPower >= attackerStrength * (temperament === 'bold' ? 0.78 : 0.98)) {
+    return rand() < (temperament === 'timid' ? 0.4 : 0.76) ? 'fight' : 'flee';
   }
-  return rand() < 0.45 ? 'flee' : 'surrender';
+  return rand() < (temperament === 'timid' ? 0.55 : 0.42) ? 'flee' : 'surrender';
 }
 
 export function shiftFactionStanding(

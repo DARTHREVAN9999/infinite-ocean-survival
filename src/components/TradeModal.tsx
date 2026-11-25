@@ -229,7 +229,7 @@ export const TradeModal: React.FC<TradeModalProps> = ({
             data-testid="fishing-trawler-notice"
             className="mx-6 mt-3 px-4 py-2.5 rounded bg-[#142733] border border-[#5ba3b8]/45 text-sm text-[#c9ecf7] font-medium"
           >
-            Fishing Vessel Provisioning: Fishing boats and trawlers strictly trade only Provisions (Food) and Fresh Water.
+            Fishing Vessel Provisioning: Fishing boats and trawlers strictly trade Provisions (Food), Fresh Water, and Sea Salt.
           </div>
         )}
 
@@ -300,7 +300,7 @@ export const TradeModal: React.FC<TradeModalProps> = ({
               {sellList.length === 0 ? (
                 <div className="p-4 border border-[#c99d4e]/25 rounded bg-[#101922] text-sm text-[#9b8f7a]">
                   {merchant.isFishingTrawler
-                    ? 'Fishing trawlers only purchase Provisions or Fresh Water.'
+                    ? 'Fishing trawlers only purchase Provisions, Fresh Water, or Sea Salt.'
                     : 'No eligible goods in your cargo hold.'}
                 </div>
               ) : (

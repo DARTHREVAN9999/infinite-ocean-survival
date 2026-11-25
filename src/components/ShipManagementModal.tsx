@@ -5,6 +5,7 @@ import {
   CrewAutoAssignMode,
   CrewRole,
   CustomFlagConfig,
+  FishingGearId,
   FlagDyeId,
   FlagEmblemId,
   FlagPatternId,
@@ -51,6 +52,7 @@ import {
   getFleetUnlockStatus,
   MAX_FLEET_SIZE,
 } from '../game/fleet';
+import { FISHING_GEAR_ORDER, FISHING_GEAR_SPECS } from '../game/fishing';
 import { drawFlagToCanvas } from '../engine/textures';
 
 interface ShipManagementModalProps {
@@ -73,6 +75,8 @@ interface ShipManagementModalProps {
   onBuyFleetShip: (shipClass: FleetShipClass, customName?: string) => { ok: boolean; message: string };
   onSetFleetCommand: (shipId: string, command: FleetCommand) => void;
   onRenameFleetShip: (shipId: string, name: string) => void;
+  onBuyFishingGear: (gearId: FishingGearId) => { ok: boolean; message: string };
+  onConvertFishToFood: (kind: 'fishCatch' | 'rareFish', qty: number) => { ok: boolean; message: string };
 }
 
 type TabId = 'weapons' | 'hull' | 'repairs' | 'crew' | 'flag' | 'fleet' | 'cargo';
@@ -123,6 +127,8 @@ export const ShipManagementModal: React.FC<ShipManagementModalProps> = ({
   onBuyFleetShip,
   onSetFleetCommand,
   onRenameFleetShip,
+  onBuyFishingGear,
+  onConvertFishToFood,
 }) => {
   const [tab, setTab] = useState<TabId>('weapons');
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -459,6 +465,59 @@ export const ShipManagementModal: React.FC<ShipManagementModalProps> = ({
                   </div>
                 );
               })}
+
+              {/* Fishing Rigging Equipment */}
+              <div>
+                <h3 className="font-display text-base uppercase tracking-wider text-[#d8ae5e] mb-3">
+                  Shipboard Fishing Gear
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {FISHING_GEAR_ORDER.filter((g) => g !== 'none').map((gId) => {
+                    const spec = FISHING_GEAR_SPECS[gId];
+                    const equipped = (p.upgrades.fishingGear ?? 'none') === gId;
+                    const tierOk = p.upgrades.hullTier >= spec.minHullTier;
+                    const affordable = tierOk && p.gold >= spec.cost;
+                    return (
+                      <div
+                        key={gId}
+                        className={`p-4 rounded bg-[#101a24] border flex flex-col justify-between gap-3 ${
+                          equipped ? 'border-[#4e9f76]' : 'border-[#c99d4e]/25'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-baseline justify-between gap-2">
+                            <h4 className="text-base font-bold text-[#f7efe0]">{spec.name}</h4>
+                            <span className="font-mono-num text-sm font-bold text-[#efc570]">{spec.cost}g</span>
+                          </div>
+                          <p className="text-xs text-[#cfc3ae] mt-1">{spec.description}</p>
+                          <div className="mt-2 text-xs font-mono-num text-[#9ec4d1]">
+                            Cycle {spec.catchIntervalSec}s · Haul +{spec.haulBonus} · Hull T{spec.minHullTier}+
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          data-testid={`buy-fishing-gear-${gId}`}
+                          disabled={equipped || !affordable}
+                          onClick={() => setFeedback(onBuyFishingGear(gId).message)}
+                          className={`w-full py-2 text-xs font-bold rounded transition-colors ${
+                            equipped
+                              ? 'bg-[#1d332a] text-[#83cca5] cursor-default'
+                              : affordable
+                                ? 'bg-[#c99d4e] hover:bg-[#dfb261] text-[#14100b] cursor-pointer'
+                                : 'bg-[#1b2530] text-[#837b6d] cursor-not-allowed'
+                          }`}
+                        >
+                          {equipped
+                            ? 'Mounted on Vessel'
+                            : !tierOk
+                              ? `Requires Hull Tier ${spec.minHullTier}`
+                              : `Rig Gear (${spec.cost}g)`}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           )}
 
@@ -622,11 +681,11 @@ export const ShipManagementModal: React.FC<ShipManagementModalProps> = ({
               </div>
 
               {/* Active Role Counts */}
-              <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-2">
                 {CREW_ROLES.map((r) => (
                   <div
                     key={r}
-                    className="px-2.5 py-1.5 rounded bg-[#0e1620] border border-[#c99d4e]/20 text-center"
+                    className="px-2 py-1.5 rounded bg-[#0e1620] border border-[#c99d4e]/20 text-center"
                   >
                     <div className="font-mono-num text-sm font-bold text-[#efc570]">
                       {roleCounts[r]}
@@ -705,12 +764,13 @@ export const ShipManagementModal: React.FC<ShipManagementModalProps> = ({
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between gap-2 text-xs font-mono-num text-[#b8c4ce]">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono-num text-[#b8c4ce]">
                         <span>Sail {m.skills.sailing}</span>
                         <span>Rep {m.skills.repair}</span>
                         <span>Gun {m.skills.combat}</span>
                         <span>Nav {m.skills.navigation}</span>
                         <span>Str {m.skills.strength}</span>
+                        <span>Fish {m.skills.fishing ?? 3}</span>
                       </div>
 
                       <div className="flex items-center justify-between gap-2 pt-1">
@@ -1295,6 +1355,51 @@ export const ShipManagementModal: React.FC<ShipManagementModalProps> = ({
                     className="h-full bg-[#c99d4e]"
                     style={{ width: `${Math.min(100, (cargoUsed / Math.max(1, cargoCap)) * 100)}%` }}
                   />
+                </div>
+
+                {/* Galley Fish-to-Provisions Converter */}
+                <div className="p-4 rounded bg-[#101a24] border border-[#c99d4e]/35 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs uppercase tracking-wider font-bold text-[#efc570]">
+                      Ship Galley · Salt &amp; Preserve Catch
+                    </div>
+                    <p className="text-xs text-[#cbbda4] mt-0.5">
+                      Convert caught fish into preserved food rations (1 Fish Catch = +3 Food · 1 Rare Trophy Fish = +6 Food).
+                    </p>
+                    <div className="text-xs font-mono-num text-[#9ec4d1] mt-1">
+                      Fresh Catch: <strong>{Math.floor(p.inventory.fishCatch || 0)}</strong> · Rare Trophy:{' '}
+                      <strong>{Math.floor(p.inventory.rareFish || 0)}</strong> · Provisions:{' '}
+                      <strong>{Math.floor(p.inventory.food || 0)}</strong>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      data-testid="convert-fish-btn"
+                      disabled={(p.inventory.fishCatch || 0) < 1}
+                      onClick={() => setFeedback(onConvertFishToFood('fishCatch', 1).message)}
+                      className="px-3 py-1.5 rounded bg-[#2a5c4a] hover:bg-[#34725c] disabled:bg-[#1a242e] disabled:text-[#6f7880] text-xs font-bold text-white cursor-pointer"
+                    >
+                      Salt 1 Fish (+3 Food)
+                    </button>
+                    <button
+                      type="button"
+                      disabled={(p.inventory.fishCatch || 0) < 1}
+                      onClick={() => setFeedback(onConvertFishToFood('fishCatch', Math.floor(p.inventory.fishCatch || 0)).message)}
+                      className="px-3 py-1.5 rounded bg-[#3d8b68] hover:bg-[#49a37b] disabled:bg-[#1a242e] disabled:text-[#6f7880] text-xs font-bold text-white cursor-pointer"
+                    >
+                      Salt All Regular
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="convert-rare-fish-btn"
+                      disabled={(p.inventory.rareFish || 0) < 1}
+                      onClick={() => setFeedback(onConvertFishToFood('rareFish', 1).message)}
+                      className="px-3 py-1.5 rounded bg-[#c99d4e] hover:bg-[#dfb261] disabled:bg-[#1a242e] disabled:text-[#6f7880] text-xs font-bold text-[#14100b] cursor-pointer"
+                    >
+                      Salt 1 Rare (+6 Food)
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-2">

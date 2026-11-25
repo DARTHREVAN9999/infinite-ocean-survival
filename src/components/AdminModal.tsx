@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CloudLightning, Compass, Crown, Ghost, ShieldAlert, Ship, Skull, X } from 'lucide-react';
+import { CloudLightning, Compass, Crown, Ghost, MapPin, ShieldAlert, Ship, Skull, Snowflake, X } from 'lucide-react';
 import { AdminTeleportTarget, GhostSizeTier, HudSnapshot, WeatherType } from '../game/types';
 import { ALL_WEATHER_TYPES, WEATHER_PRESETS } from '../game/waveMath';
 
@@ -14,6 +14,7 @@ interface AdminModalProps {
   onSpawnMaxFleet: () => { ok: boolean; message: string };
   onSpawnColossalCompanion: () => { ok: boolean; message: string };
   onSpawnGhostShip: (size: GhostSizeTier) => { ok: boolean; message: string };
+  onProjectBounty: () => { ok: boolean; message: string };
   onSetWeather: (type: WeatherType) => { ok: boolean; message: string };
 }
 
@@ -36,6 +37,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   onSpawnMaxFleet,
   onSpawnColossalCompanion,
   onSpawnGhostShip,
+  onProjectBounty,
   onSetWeather,
 }) => {
   const [password, setPassword] = useState('');
@@ -199,6 +201,19 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                     Summon a loyal legendary sea beast escort
                   </div>
                 </button>
+
+                <button
+                  type="button"
+                  data-testid="admin-project-bounty-btn"
+                  disabled={!hud.adminEnabled}
+                  onClick={() => setFeedback(onProjectBounty().message)}
+                  className="p-3 rounded bg-[#2a1d14] hover:bg-[#3a281b] disabled:opacity-45 border border-[#efc570]/50 text-left cursor-pointer"
+                >
+                  <div className="text-sm font-bold text-[#efc570]">Project Bounty Contract</div>
+                  <div className="text-xs text-[#b7aa92] mt-0.5">
+                    Broadcast a Pirate or Crown bounty warrant immediately
+                  </div>
+                </button>
               </div>
             </div>
 
@@ -269,6 +284,10 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                           <Skull className="w-3.5 h-3.5 text-[#f1887c] shrink-0" />
                         ) : t.kind === 'ghost_ship' ? (
                           <Ghost className="w-3.5 h-3.5 text-[#5eead4] shrink-0" />
+                        ) : t.kind === 'icefield' ? (
+                          <Snowflake className="w-3.5 h-3.5 text-[#93c5fd] shrink-0" />
+                        ) : t.kind === 'island_shore' || t.kind === 'settlement' ? (
+                          <MapPin className="w-3.5 h-3.5 text-[#4ade80] shrink-0" />
                         ) : (
                           <Ship className="w-3.5 h-3.5 text-[#efc570] shrink-0" />
                         )}

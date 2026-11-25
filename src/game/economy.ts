@@ -1,4 +1,5 @@
 import {
+  AiIntelligenceTier,
   CannonUpgrades,
   CustomFlagConfig,
   FlagDyeId,
@@ -19,6 +20,7 @@ import {
   ShipwreckData,
   ValuableCargoId,
   VesselClass,
+  VesselTemperament,
   WeaponType,
   WreckArchetype,
   WreckSection,
@@ -76,6 +78,14 @@ export const RESOURCE_DEFS: Record<ResourceId, ResourceDef> = {
     rarity: 'Common',
     description: 'Casks of potable water vital for long open-ocean crossings.',
   },
+  salt: {
+    id: 'salt',
+    name: 'Sea Salt',
+    weight: 0.5,
+    basePrice: 9,
+    rarity: 'Common',
+    description: 'Coarse curing salt that preserves crew provisions; running dry causes provisions to spoil nearly twice as fast.',
+  },
   tools: {
     id: 'tools',
     name: 'Shipwright Tools',
@@ -112,7 +122,7 @@ export const RESOURCE_DEFS: Record<ResourceId, ResourceDef> = {
     id: 'cargo',
     name: 'Merchant Crates',
     weight: 1.4,
-    basePrice: 44,
+    basePrice: 26,
     rarity: 'Valuable',
     isValuableCargo: true,
     description: 'Assorted port trade goods valued by regional merchants.',
@@ -121,7 +131,7 @@ export const RESOURCE_DEFS: Record<ResourceId, ResourceDef> = {
     id: 'jewellery',
     name: 'Jewellery & Gems',
     weight: 0.4,
-    basePrice: 125,
+    basePrice: 75,
     rarity: 'Valuable',
     isValuableCargo: true,
     description: 'Gold rings, emerald brooches, and polished gems prized by wealthy captains.',
@@ -130,7 +140,7 @@ export const RESOURCE_DEFS: Record<ResourceId, ResourceDef> = {
     id: 'preciousDecor',
     name: 'Precious Decorations',
     weight: 0.8,
-    basePrice: 98,
+    basePrice: 59,
     rarity: 'Valuable',
     isValuableCargo: true,
     description: 'Silver candelabras, gilded chalices, and ivory cabin ornaments.',
@@ -139,7 +149,7 @@ export const RESOURCE_DEFS: Record<ResourceId, ResourceDef> = {
     id: 'silk',
     name: 'Silk & Fine Fabrics',
     weight: 0.6,
-    basePrice: 82,
+    basePrice: 49,
     rarity: 'Valuable',
     isValuableCargo: true,
     description: 'Bolts of dyed eastern silk and velvet bolts sought in distant ports.',
@@ -148,7 +158,7 @@ export const RESOURCE_DEFS: Record<ResourceId, ResourceDef> = {
     id: 'rareSpices',
     name: 'Rare Spices',
     weight: 0.5,
-    basePrice: 74,
+    basePrice: 44,
     rarity: 'Valuable',
     isValuableCargo: true,
     description: 'Sealed jars of saffron, cloves, cinnamon, and nutmeg.',
@@ -157,7 +167,7 @@ export const RESOURCE_DEFS: Record<ResourceId, ResourceDef> = {
     id: 'fineFurniture',
     name: 'Fine Furniture',
     weight: 2.2,
-    basePrice: 112,
+    basePrice: 67,
     rarity: 'Valuable',
     isValuableCargo: true,
     description: 'Carved mahogany tables, inlaid chests, and admiral writing desks.',
@@ -166,7 +176,7 @@ export const RESOURCE_DEFS: Record<ResourceId, ResourceDef> = {
     id: 'paintings',
     name: 'Paintings & Artwork',
     weight: 0.9,
-    basePrice: 138,
+    basePrice: 83,
     rarity: 'Valuable',
     isValuableCargo: true,
     description: 'Oil seascapes and gilt-framed portraits rescued from noble cabins.',
@@ -175,7 +185,7 @@ export const RESOURCE_DEFS: Record<ResourceId, ResourceDef> = {
     id: 'antiques',
     name: 'Antiques & Relics',
     weight: 1.0,
-    basePrice: 155,
+    basePrice: 93,
     rarity: 'Valuable',
     isValuableCargo: true,
     description: 'Ancient brass astrolabes, porcelain vases, and heirloom curiosities.',
@@ -184,7 +194,7 @@ export const RESOURCE_DEFS: Record<ResourceId, ResourceDef> = {
     id: 'luxuryGoods',
     name: 'Luxury Goods',
     weight: 0.8,
-    basePrice: 118,
+    basePrice: 71,
     rarity: 'Valuable',
     isValuableCargo: true,
     description: 'Perfumed oils, crystal decanters, and fine pocket watches.',
@@ -193,7 +203,7 @@ export const RESOURCE_DEFS: Record<ResourceId, ResourceDef> = {
     id: 'rareImports',
     name: 'Rare Imported Goods',
     weight: 1.1,
-    basePrice: 104,
+    basePrice: 62,
     rarity: 'Valuable',
     isValuableCargo: true,
     description: 'Exotic teas, lacquered boxes, and curios from distant archipelagos.',
@@ -237,6 +247,38 @@ export const RESOURCE_DEFS: Record<ResourceId, ResourceDef> = {
     basePrice: 95,
     rarity: 'Specialised',
     description: 'Gilt leaf, carved figurehead oak, and rare pigments for flagship regalia.',
+  },
+  fishCatch: {
+    id: 'fishCatch',
+    name: 'Fresh Catch',
+    weight: 0.5,
+    basePrice: 7,
+    rarity: 'Common',
+    description: 'Salted cod, herring, and snapper caught at sea — trade for coin or cure into crew provisions.',
+  },
+  rareFish: {
+    id: 'rareFish',
+    name: 'Prize Fish',
+    weight: 0.6,
+    basePrice: 28,
+    rarity: 'Uncommon',
+    description: 'Prized swordfish, dorado, or sturgeon cuts coveted by port taverns and captains.',
+  },
+  animalHides: {
+    id: 'animalHides',
+    name: 'Cured Pelts & Hides',
+    weight: 0.7,
+    basePrice: 19,
+    rarity: 'Uncommon',
+    description: 'Tough hides harvested on wild islands, valued by frontier traders and leatherworkers.',
+  },
+  leadShot: {
+    id: 'leadShot',
+    name: 'Lead Musket Shot',
+    weight: 0.25,
+    basePrice: 6,
+    rarity: 'Military',
+    description: 'Cast lead balls and paper cartridges used in flintlock pistols and smoothbore muskets.',
   },
 };
 
@@ -373,6 +415,7 @@ export function createEmptyInventory(): Inventory {
     cloth: 0,
     food: 0,
     water: 0,
+    salt: 0,
     tools: 0,
     gunpowder: 0,
     cannonballs: 0,
@@ -382,6 +425,10 @@ export function createEmptyInventory(): Inventory {
     reinforcedMetals: 0,
     specializedSailcloth: 0,
     decorativeMaterials: 0,
+    fishCatch: 0,
+    rareFish: 0,
+    animalHides: 0,
+    leadShot: 0,
     cargo: 0,
     jewellery: 0,
     preciousDecor: 0,
@@ -404,9 +451,11 @@ export function createStartingInventory(): Inventory {
     cloth: 8,
     food: 40,
     water: 42,
+    salt: 12,
     tools: 2,
-    gunpowder: 10,
+    gunpowder: 14,
     cannonballs: 12,
+    leadShot: 24,
     medicine: 4,
     cargo: 1,
   };
@@ -1193,7 +1242,7 @@ export interface TradeResult {
 
 export function isItemAllowedForMerchant(merchant: MerchantShipData, id: ResourceId): boolean {
   if (merchant.isFishingTrawler) {
-    return id === 'food' || id === 'water';
+    return id === 'food' || id === 'water' || id === 'salt';
   }
   return true;
 }
@@ -1224,7 +1273,7 @@ export function executeTrade(
   if (!isItemAllowedForMerchant(merchant, resourceId)) {
     return {
       ok: false,
-      error: 'Fishing trawlers only carry and trade Provisions and Fresh Water.',
+      error: 'Fishing trawlers only carry and trade Provisions, Fresh Water, and Sea Salt.',
       playerGold,
       playerInventory,
       merchantGold: merchant.gold,
@@ -1910,9 +1959,9 @@ export function generateSunkenVesselWreck(
     totalGold = Math.max(18, Math.round(m.gold * 0.55));
     const stockEntries = (Object.entries(m.stock) as [ResourceId, number][])
       .filter(([id, qty]) => qty > 0 && RESOURCE_DEFS[id])
-      .filter(([id]) => (!m.isFishingTrawler ? true : id === 'food' || id === 'water'));
+      .filter(([id]) => (!m.isFishingTrawler ? true : id === 'food' || id === 'water' || id === 'salt'));
 
-    const maxTypes = Math.min(stockEntries.length, m.isFishingTrawler ? 2 : Math.max(3, sectionCount));
+    const maxTypes = Math.min(stockEntries.length, m.isFishingTrawler ? 3 : Math.max(3, sectionCount));
     for (let k = 0; k < maxTypes; k++) {
       const idx = (k * 3 + Math.floor(rand() * stockEntries.length)) % stockEntries.length;
       const [id, qty] = stockEntries[idx];
@@ -2117,17 +2166,27 @@ export function generateMerchantShip(
   const tierScale =
     tier === 'small_trader' ? 1 : tier === 'medium_merchant' ? 1.85 : tier === 'large_cargo' ? 3.0 : 4.2;
 
+  // Most Crown Navy vessels are pure fighting warships that do not engage in private trade
+  const canTrade = isCrown
+    ? vesselClass === 'crown_supply' || rand() < 0.18
+    : true;
+
   if (isFishingTrawler) {
-    // STRICT RULE: Fishing boats & trawlers ONLY carry/trade provisions (food) and fresh water!
+    // STRICT RULE: Fishing boats & trawlers carry/trade Provisions, Fresh Water, and Sea Salt!
     const fishMult = vesselClass === 'fishing_trawler' ? 2.6 : 1.3;
     stock.food = Math.round((24 + rand() * 34) * fishMult);
     stock.water = Math.round((22 + rand() * 32) * fishMult);
+    stock.salt = Math.round((10 + rand() * 14) * (vesselClass === 'fishing_trawler' ? 1.7 : 1.0));
     mults.food = 0.72 + rand() * 0.25;
     mults.water = 0.7 + rand() * 0.25;
+    mults.salt = 0.78 + rand() * 0.24;
   } else {
     stock.wood = Math.round((12 + rand() * 20) * tierScale);
     stock.food = Math.round((14 + rand() * 22) * tierScale);
     stock.water = Math.round((16 + rand() * 24) * tierScale);
+    if (vesselClass === 'supply_ship' || vesselClass === 'crown_supply' || (!isCrown && rand() < 0.55)) {
+      stock.salt = Math.round((8 + rand() * 14) * tierScale);
+    }
     stock.rope = Math.round((8 + rand() * 14) * tierScale);
     stock.cloth = Math.round((6 + rand() * 14) * tierScale);
     stock.iron = Math.round((4 + rand() * 10) * tierScale);
@@ -2144,6 +2203,9 @@ export function generateMerchantShip(
     if (tier !== 'small_trader') {
       stock.gunpowder = Math.round((4 + rand() * 12) * tierScale);
       stock.cannonballs = Math.round((6 + rand() * 16) * tierScale);
+      stock.leadShot = Math.round((10 + rand() * 18) * tierScale);
+    } else {
+      stock.leadShot = Math.round(6 + rand() * 12);
     }
     if (tier === 'large_cargo' || tier === 'wealthy_galleon' || isCrown) {
       stock.advancedTimber = Math.round((2 + rand() * 6) * (tier === 'wealthy_galleon' ? 2 : 1));
@@ -2168,9 +2230,11 @@ export function generateMerchantShip(
     } else if (specialty === 'armory' || isCrown) {
       stock.gunpowder += 18;
       stock.cannonballs += 26;
+      stock.leadShot += 28;
       stock.reinforcedMetals += 3;
       mults.gunpowder = 0.84;
       mults.cannonballs = 0.82;
+      mults.leadShot = 0.82;
     }
   }
 
@@ -2299,6 +2363,52 @@ export function generateMerchantShip(
   const dist = 280 + rand() * 380;
   const names = VESSEL_NAMES[vesselClass];
 
+  // Some traders and all trawlers carry zero cannons so non-combat encounters vary meaningfully
+  const unarmedChance =
+    vesselClass === 'small_merchant'
+      ? 0.65
+      : vesselClass === 'supply_ship' || vesselClass === 'passenger_ship'
+        ? 0.5
+        : vesselClass === 'medium_merchant'
+          ? 0.35
+          : vesselClass === 'large_cargo'
+            ? 0.2
+            : 0;
+  const finalCannons =
+    isFishingTrawler || (!isCrown && unarmedChance > 0 && rand() < unarmedChance)
+      ? 0
+      : cannonTable[vesselClass];
+
+  const tRoll = rand();
+  const temperament: VesselTemperament = isCrown
+    ? 'bold'
+    : finalCannons === 0
+      ? tRoll < 0.42
+        ? 'timid'
+        : tRoll < 0.78
+          ? 'cautious'
+          : 'bold'
+      : tRoll < 0.25
+        ? 'timid'
+        : tRoll < 0.7
+          ? 'cautious'
+          : 'bold';
+
+  const aiIntelligence: AiIntelligenceTier = isCrown
+    ? vesselClass === 'crown_flagship' ||
+      vesselClass === 'crown_ship_of_line' ||
+      vesselClass === 'crown_warship' ||
+      vesselClass === 'crown_frigate'
+      ? rand() < 0.55
+        ? 'veteran'
+        : 'tactical'
+      : rand() < 0.28
+        ? 'veteran'
+        : 'tactical'
+    : rand() < 0.48
+      ? 'basic'
+      : 'tactical';
+
   return {
     id,
     name: names[Math.floor(rand() * names.length)],
@@ -2321,7 +2431,7 @@ export function generateMerchantShip(
     priceMultipliers: mults,
     hull: maxHull,
     maxHull,
-    cannons: cannonTable[vesselClass],
+    cannons: finalCannons,
     crewCount: crewTable[vesselClass],
     maxCrew: crewTable[vesselClass],
     hireableCrew,
@@ -2337,5 +2447,9 @@ export function generateMerchantShip(
     discovered: false,
     sunk: false,
     sinkProgress: 0,
+    temperament,
+    aiIntelligence,
+    desperateRamCooldown: 0,
+    canTrade,
   };
 }
