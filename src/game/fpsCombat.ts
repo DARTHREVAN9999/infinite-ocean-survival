@@ -995,40 +995,21 @@ export function isDiscoveryChestGuarded(
 }
 
 /**
- * Resolves explorer death during first-person island exploration:
- * loses one crew member (lowest-XP sailor first), returns control to the ship,
- * and reports "Your explorer died" clearly.
+ * Resolves explorer death during island exploration. Multiplayer survival
+ * keeps the crew and supplies; only the player's gold is lost by the caller.
  */
 export function resolveExplorerDeath(save: SaveData): {
   lostCrewName: string | null;
   remainingCrew: number;
   message: string;
 } {
-  let lostCrewName: string | null = null;
-  if (save.player.crew.length > 0) {
-    let victimIdx = 0;
-    let lowestScore = Infinity;
-    for (let i = 0; i < save.player.crew.length; i++) {
-      const c = save.player.crew[i];
-      const score = (c.xp || 0) + (c.role === 'helmsman' || c.role === 'repair' ? 200 : 0);
-      if (score < lowestScore) {
-        lowestScore = score;
-        victimIdx = i;
-      }
-    }
-    const [fallen] = save.player.crew.splice(victimIdx, 1);
-    lostCrewName = fallen?.name ?? null;
-    for (const c of save.player.crew) {
-      c.morale = Math.max(15, c.morale - 6);
-    }
-  }
-
-  const remainingCrew = save.player.crew.length;
-  const message = lostCrewName
-    ? `Your explorer died ashore! ${lostCrewName} fell in the expedition (${remainingCrew} crew remaining). Control returned to ${save.player.shipName}.`
-    : `Your explorer died ashore! Control returned to ${save.player.shipName}.`;
-
-  return { lostCrewName, remainingCrew, message };
+  // Multiplayer survival rule: an explorer's death costs gold only.
+  // Crew, ship upgrades, cargo, and supplies are retained.
+  return {
+    lostCrewName: null,
+    remainingCrew: save.player.crew.length,
+    message: `Your explorer died ashore. Your gold was lost, but your crew, ship and supplies were kept.`,
+  };
 }
 
 export interface FpsMouseInputState {

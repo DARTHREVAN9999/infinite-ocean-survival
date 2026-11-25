@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { MultiplayerClient, loadMultiplayerName, saveMultiplayerName, type MultiplayerStatus } from './network/MultiplayerClient';
 import {
   HudSnapshot,
   MerchantShipData,
@@ -14,6 +13,7 @@ import {
   saveVoyageToStorage,
 } from './game/storage';
 import { OceanEngine } from './engine/oceanScene';
+import { getMultiplayerPlayerId, MULTIPLAYER_WORLD_SEED, MultiplayerSession } from './game/multiplayer';
 import { TitleScreen } from './components/TitleScreen';
 import { MainHud } from './components/MainHud';
 import { ShipManagementModal } from './components/ShipManagementModal';
@@ -74,12 +74,14 @@ function modalMusicKind(m: ActiveModal): string | null {
 export function App() {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<OceanEngine | null>(null);
-  const multiplayerRef = useRef<MultiplayerClient | null>(null);
-  const [playerName, setPlayerName] = useState<string>(() => loadMultiplayerName());
-  const playerNameRef = useRef(playerName);
-  playerNameRef.current = playerName;
-  const [multiplayerStatus, setMultiplayerStatus] = useState<MultiplayerStatus>('connecting');
-  const [onlinePlayers, setOnlinePlayers] = useState(1);
+  const multiplayerRef = useRef<MultiplayerSession | null>(null);
+  const pendingSpawnRef = useRef<{ x: number; z: number } | null>(null);
+  const firstTimeJoinRef = useRef(false);
+  const worldActiveRef = useRef(false);
+  const profileReadyRef = useRef(false);
+  const pendingTitleActionRef = useRef<{ kind: 'new'; shipName?: string } | { kind: 'continue' } | null>(null);
+  const [multiplayerStatus, setMultiplayerStatus] = useState('Connecting…');
+  const [onlinePlayers, setOnlinePlayers] = useState(0);
 
   const [savedOnDisk, setSavedOnDisk] = useState<SaveData | null>(() => loadVoyageFromStorage());
   const [saveState, setSaveState] = useState<SaveData>(() => loadVoyageFromStorage() ?? createNewVoyage());
@@ -241,6 +243,8 @@ export function App() {
         setModal({ type: 'settlement', id: settlement.id });
       },
       onStateChange: (nextPhase) => {
+        worldActiveRef.current = nextPhase === 'playing' || nextPhase === 'paused';
+        if (!worldActiveRef.current) multiplayerRef.current?.leaveWorld();
         setPhase(nextPhase);
         if (nextPhase !== 'playing') {
           setModal(null);
@@ -252,41 +256,84 @@ export function App() {
       },
       onSaveUpdate: (snap) => {
         setSaveState({ ...snap });
-        if (phaseRef.current === 'title') setSavedOnDisk({ ...snap });
+        multiplayerRef.current?.saveProfile(snap);
         setModalTick((t) => t + 1);
       },
       onHotkeyMenu: (menu) => handleHotkeyRef.current(menu),
-      onPlayerDeath: () => {
-        const client = multiplayerRef.current;
-        if (!client?.requestRespawn()) {
-          engine.respawnAfterDeath({ x: 0, z: 0, heading: 0 });
-        }
-      },
     });
 
     engineRef.current = engine;
 
-    const client = new MultiplayerClient({
-      onStatus: (status) => {
-        setMultiplayerStatus(status);
-        if (status !== 'online') setOnlinePlayers(0);
+    const multiplayer = new MultiplayerSession();
+    multiplayerRef.current = multiplayer;
+    multiplayer.connect(getMultiplayerPlayerId(), {
+      onProfileLoaded: (serverSave) => {
+        const localSave = loadVoyageFromStorage();
+        const selectedSave = serverSave ?? localSave;
+        if (selectedSave) {
+          selectedSave.seed = MULTIPLAYER_WORLD_SEED;
+          engine.loadMultiplayerProfile(selectedSave);
+          // A local single-player save without a server profile is making its first multiplayer join.
+          firstTimeJoinRef.current = !serverSave;
+          setSavedOnDisk(selectedSave);
+          setSaveState({ ...selectedSave });
+          multiplayer.saveProfile(selectedSave);
+        } else {
+          firstTimeJoinRef.current = true;
+          setSavedOnDisk(null);
+        }
+        profileReadyRef.current = true;
+        const pendingAction = pendingTitleActionRef.current;
+        pendingTitleActionRef.current = null;
+        if (pendingAction?.kind === 'new') {
+          engine.startNewVoyage(pendingAction.shipName);
+          multiplayer.saveProfile(engine.getSaveSnapshot());
+        } else if (pendingAction?.kind === 'continue') {
+          if (selectedSave) engine.continueVoyage(selectedSave);
+          else engine.startNewVoyage();
+        }
       },
-      onWelcome: ({ worldSeed, spawn }) => {
-        engine.setMultiplayerWorldSeed(worldSeed);
-        if (spawn) engine.applyMultiplayerSpawn(spawn);
+      onWelcome: (welcome) => {
+        engine.setRemotePlayers(welcome.players ?? []);
+        setOnlinePlayers(welcome.players?.length ?? 0);
+        if (firstTimeJoinRef.current && welcome.spawn) {
+          if (welcome.players?.length) {
+            pendingSpawnRef.current = welcome.spawn;
+            if (worldActiveRef.current) {
+              engine.setMultiplayerSpawn(welcome.spawn.x, welcome.spawn.z);
+              pendingSpawnRef.current = null;
+              firstTimeJoinRef.current = false;
+            }
+          } else {
+            // Keep a local single-player save's old position when nobody else is online.
+            firstTimeJoinRef.current = false;
+          }
+        }
+        if (worldActiveRef.current) {
+          multiplayer.sendState(engine.getMultiplayerState());
+        }
       },
-      onPlayers: (players) => {
-        engine.syncRemotePlayers(players);
-        setOnlinePlayers(players.length + 1);
+      onPlayersChanged: (players) => {
+        engine.setRemotePlayers(players);
+        setOnlinePlayers(players.length);
       },
-      onRespawn: (spawn) => engine.respawnAfterDeath(spawn),
-      getLocalState: () => ({
-        name: playerNameRef.current,
-        ...engine.getMultiplayerShipState(),
-      }),
+      onConnectionChanged: (connected, message) => {
+        setMultiplayerStatus(connected ? 'Connected' : (message ?? 'Offline'));
+      },
     });
-    multiplayerRef.current = client;
-    client.connect(playerNameRef.current, initialData.player.shipName);
+
+    let profileCheckpoint = 0;
+    const networkSync = window.setInterval(() => {
+      if (!worldActiveRef.current) return;
+      const currentEngine = engineRef.current;
+      if (!currentEngine) return;
+      multiplayerRef.current?.sendState(currentEngine.getMultiplayerState());
+      profileCheckpoint += 1;
+      if (profileCheckpoint >= 75) {
+        profileCheckpoint = 0;
+        multiplayerRef.current?.saveProfile(currentEngine.getSaveSnapshot());
+      }
+    }, 200);
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('autostart') === '1') {
@@ -294,28 +341,49 @@ export function App() {
     }
 
     return () => {
-      client.destroy();
+      window.clearInterval(networkSync);
+      multiplayer.disconnect();
       multiplayerRef.current = null;
       engine.dispose();
       engineRef.current = null;
     };
   }, []);
 
-
-  useEffect(() => {
-    saveMultiplayerName(playerName);
-    multiplayerRef.current?.updateProfile(playerName, saveState.player.shipName);
-  }, [playerName, saveState.player.shipName]);
-
   const handleStartNew = (shipName?: string) => {
-    engineRef.current?.startNewVoyage(shipName);
+    if (!profileReadyRef.current) {
+      pendingTitleActionRef.current = { kind: 'new', shipName };
+      return;
+    }
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.startNewVoyage(shipName);
+    const spawn = pendingSpawnRef.current;
+    if (spawn) {
+      engine.setMultiplayerSpawn(spawn.x, spawn.z);
+      pendingSpawnRef.current = null;
+      firstTimeJoinRef.current = false;
+    }
+    multiplayerRef.current?.saveProfile(engine.getSaveSnapshot());
   };
 
   const handleContinue = () => {
+    if (!profileReadyRef.current) {
+      pendingTitleActionRef.current = { kind: 'continue' };
+      return;
+    }
+    const engine = engineRef.current;
     if (savedOnDisk) {
-      engineRef.current?.continueVoyage(savedOnDisk);
+      engine?.continueVoyage(savedOnDisk);
     } else {
-      engineRef.current?.startNewVoyage();
+      handleStartNew();
+      return;
+    }
+    const spawn = pendingSpawnRef.current;
+    if (engine && spawn) {
+      engine.setMultiplayerSpawn(spawn.x, spawn.z);
+      pendingSpawnRef.current = null;
+      firstTimeJoinRef.current = false;
+      multiplayerRef.current?.saveProfile(engine.getSaveSnapshot());
     }
   };
 
@@ -376,28 +444,19 @@ export function App() {
         }`}
       />
 
-      <div
-        className="fixed top-3 right-3 z-30 rounded border border-[#c99d4e]/50 bg-[#0b1722]/90 px-3 py-2 text-[11px] uppercase tracking-wider text-[#efe4cc] shadow-lg pointer-events-none"
-        aria-live="polite"
-      >
-        <span className={`inline-block w-2 h-2 rounded-full mr-2 ${multiplayerStatus === 'online' ? 'bg-emerald-400' : multiplayerStatus === 'full' ? 'bg-red-400' : 'bg-amber-400'}`} />
-        {multiplayerStatus === 'online'
-          ? `Shared ocean · ${onlinePlayers} online`
-          : multiplayerStatus === 'full'
-            ? 'Server full'
-            : multiplayerStatus === 'offline'
-              ? 'Multiplayer offline'
-              : 'Connecting to shared ocean…'}
-      </div>
-
       {phase === 'title' && (
         <TitleScreen
           savedVoyage={savedOnDisk}
           onStartNew={handleStartNew}
           onContinue={handleContinue}
-          playerName={playerName}
-          onPlayerNameChange={setPlayerName}
         />
+      )}
+
+      {phase === 'playing' && (
+        <div className="pointer-events-none fixed bottom-3 right-3 z-[30] rounded-md border border-[#d7ae63]/50 bg-[#08131e]/85 px-3 py-2 text-xs text-[#fff0d1] shadow-lg backdrop-blur-sm">
+          <span className={multiplayerStatus === 'Connected' ? 'text-emerald-300' : 'text-amber-200'}>● {multiplayerStatus}</span>
+          <span className="ml-2 text-white/75">{onlinePlayers} other {onlinePlayers === 1 ? 'captain' : 'captains'}</span>
+        </div>
       )}
 
       {phase === 'playing' && hud && (
@@ -822,7 +881,9 @@ export function App() {
           onUpdateSettings={(s) => engineRef.current?.updateSettings(s)}
           onReturnTitle={() => {
             if (engineRef.current) {
-              saveVoyageToStorage(engineRef.current.getSaveSnapshot());
+              const snapshot = engineRef.current.getSaveSnapshot();
+              saveVoyageToStorage(snapshot);
+              multiplayerRef.current?.saveProfile(snapshot);
               engineRef.current.setPhase('title');
             }
           }}

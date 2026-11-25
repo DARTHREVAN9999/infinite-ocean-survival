@@ -7,16 +7,12 @@ interface TitleScreenProps {
   savedVoyage: SaveData | null;
   onStartNew: (shipName: string) => void;
   onContinue: () => void;
-  playerName: string;
-  onPlayerNameChange: (name: string) => void;
 }
 
 export const TitleScreen: React.FC<TitleScreenProps> = ({
   savedVoyage,
   onStartNew,
   onContinue,
-  playerName,
-  onPlayerNameChange,
 }) => {
   const [selectedShipName, setSelectedShipName] = useState<string>(() => PRE_CHOSEN_SHIP_NAMES[0]);
 
@@ -58,21 +54,9 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           Sail an endless open sea. Salvage wrecks, trade or raid across factions, upgrade your ship, and survive the deep.
         </p>
 
-        {/* Multiplayer captain identity */}
+        {/* Pre-Chosen Ship Name Picker & Reroll */}
         <div className="mt-6 max-w-md p-3.5 rounded-md bg-[#0e1924]/92 border border-[#c99d4e]/40 space-y-2">
-          <label className="block text-xs uppercase tracking-wider text-[#d8ae5e] font-bold" htmlFor="captain-name">
-            Captain Name — shown above your ship
-          </label>
-          <input
-            id="captain-name"
-            type="text"
-            maxLength={22}
-            value={playerName}
-            onChange={(event) => onPlayerNameChange(event.target.value)}
-            placeholder="Enter your captain name"
-            className="w-full bg-[#142230] border border-[#c99d4e]/40 rounded px-3 py-2 text-sm font-semibold text-[#f7efe0] focus:outline-none focus:border-[#efc570]"
-          />
-          <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-[#d8ae5e] font-bold pt-1">
+          <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-[#d8ae5e] font-bold">
             <Ship className="w-3.5 h-3.5" />
             <span>{savedVoyage ? 'New Voyage Vessel Name' : 'Choose Vessel Name'}</span>
           </div>

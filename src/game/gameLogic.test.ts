@@ -990,11 +990,12 @@ test('larger flatter islands, solid coastline collisions, cold island ice collar
   assert.equal(lootG.looted, true);
   assert.ok(invVoyage.player.gold > goldPreLoot);
 
-  // 5. Explorer death removes 1 crew member and says "Your explorer died"
+  // 5. Explorer death keeps the crew; the multiplayer engine removes only gold.
   const crewPreDeath = invVoyage.player.crew.length;
   const death = resolveExplorerDeath(invVoyage);
-  assert.equal(invVoyage.player.crew.length, crewPreDeath - 1);
+  assert.equal(invVoyage.player.crew.length, crewPreDeath);
   assert.ok(death.message.includes('Your explorer died'));
+  assert.ok(death.message.includes('gold was lost'));
 });
 
 import { SALT_SPOILAGE_MULT } from './survival';
