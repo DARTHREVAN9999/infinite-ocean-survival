@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { MultiplayerClient, loadMultiplayerName, saveMultiplayerName, type MultiplayerStatus } from './network/MultiplayerClient';
 import {
   HudSnapshot,
   MerchantShipData,
@@ -73,6 +74,12 @@ function modalMusicKind(m: ActiveModal): string | null {
 export function App() {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<OceanEngine | null>(null);
+  const multiplayerRef = useRef<MultiplayerClient | null>(null);
+  const [playerName, setPlayerName] = useState<string>(() => loadMultiplayerName());
+  const playerNameRef = useRef(playerName);
+  playerNameRef.current = playerName;
+  const [multiplayerStatus, setMultiplayerStatus] = useState<MultiplayerStatus>('connecting');
+  const [onlinePlayers, setOnlinePlayers] = useState(1);
 
   const [savedOnDisk, setSavedOnDisk] = useState<SaveData | null>(() => loadVoyageFromStorage());
   const [saveState, setSaveState] = useState<SaveData>(() => loadVoyageFromStorage() ?? createNewVoyage());
@@ -245,12 +252,41 @@ export function App() {
       },
       onSaveUpdate: (snap) => {
         setSaveState({ ...snap });
+        if (phaseRef.current === 'title') setSavedOnDisk({ ...snap });
         setModalTick((t) => t + 1);
       },
       onHotkeyMenu: (menu) => handleHotkeyRef.current(menu),
+      onPlayerDeath: () => {
+        const client = multiplayerRef.current;
+        if (!client?.requestRespawn()) {
+          engine.respawnAfterDeath({ x: 0, z: 0, heading: 0 });
+        }
+      },
     });
 
     engineRef.current = engine;
+
+    const client = new MultiplayerClient({
+      onStatus: (status) => {
+        setMultiplayerStatus(status);
+        if (status !== 'online') setOnlinePlayers(0);
+      },
+      onWelcome: ({ worldSeed, spawn }) => {
+        engine.setMultiplayerWorldSeed(worldSeed);
+        if (spawn) engine.applyMultiplayerSpawn(spawn);
+      },
+      onPlayers: (players) => {
+        engine.syncRemotePlayers(players);
+        setOnlinePlayers(players.length + 1);
+      },
+      onRespawn: (spawn) => engine.respawnAfterDeath(spawn),
+      getLocalState: () => ({
+        name: playerNameRef.current,
+        ...engine.getMultiplayerShipState(),
+      }),
+    });
+    multiplayerRef.current = client;
+    client.connect(playerNameRef.current, initialData.player.shipName);
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('autostart') === '1') {
@@ -258,10 +294,18 @@ export function App() {
     }
 
     return () => {
+      client.destroy();
+      multiplayerRef.current = null;
       engine.dispose();
       engineRef.current = null;
     };
   }, []);
+
+
+  useEffect(() => {
+    saveMultiplayerName(playerName);
+    multiplayerRef.current?.updateProfile(playerName, saveState.player.shipName);
+  }, [playerName, saveState.player.shipName]);
 
   const handleStartNew = (shipName?: string) => {
     engineRef.current?.startNewVoyage(shipName);
@@ -332,11 +376,27 @@ export function App() {
         }`}
       />
 
+      <div
+        className="fixed top-3 right-3 z-30 rounded border border-[#c99d4e]/50 bg-[#0b1722]/90 px-3 py-2 text-[11px] uppercase tracking-wider text-[#efe4cc] shadow-lg pointer-events-none"
+        aria-live="polite"
+      >
+        <span className={`inline-block w-2 h-2 rounded-full mr-2 ${multiplayerStatus === 'online' ? 'bg-emerald-400' : multiplayerStatus === 'full' ? 'bg-red-400' : 'bg-amber-400'}`} />
+        {multiplayerStatus === 'online'
+          ? `Shared ocean · ${onlinePlayers} online`
+          : multiplayerStatus === 'full'
+            ? 'Server full'
+            : multiplayerStatus === 'offline'
+              ? 'Multiplayer offline'
+              : 'Connecting to shared ocean…'}
+      </div>
+
       {phase === 'title' && (
         <TitleScreen
           savedVoyage={savedOnDisk}
           onStartNew={handleStartNew}
           onContinue={handleContinue}
+          playerName={playerName}
+          onPlayerNameChange={setPlayerName}
         />
       )}
 

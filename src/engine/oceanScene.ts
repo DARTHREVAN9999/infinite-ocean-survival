@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import type { RemotePlayerState } from '../network/MultiplayerClient';
 import {
   AdminTeleportTarget,
   ActiveEnemyStatus,
@@ -191,7 +192,6 @@ import {
   harvestWildlifeActor,
   isDiscoveryChestGuarded,
   lootIslandPirateGuard,
-  resolveExplorerDeath,
   stepFpsMouseDelta,
   stepIslandPirateGuard,
   stepWildlifeActor,
@@ -483,6 +483,24 @@ interface MuzzleFlash {
   maxLife: number;
 }
 
+interface RemotePlayerShipView {
+  id: string;
+  name: string;
+  shipName: string;
+  hullTier: number;
+  x: number;
+  z: number;
+  heading: number;
+  targetX: number;
+  targetZ: number;
+  targetHeading: number;
+  speed: number;
+  landed: boolean;
+  built: BuiltPlayerShip;
+  nameTag: THREE.Sprite;
+  nameTexture: THREE.CanvasTexture;
+}
+
 interface ActiveParticle {
   alive: boolean;
   life: number;
@@ -508,6 +526,7 @@ export interface EngineCallbacks {
   onStateChange: (phase: 'title' | 'playing' | 'paused' | 'gameover') => void;
   onSaveUpdate: (save: SaveData) => void;
   onHotkeyMenu: (menu: 'ship' | 'journal' | 'map' | 'pause' | 'interact' | 'fishing') => void;
+  onPlayerDeath?: (details: { cause: string; lostGold: number }) => void;
 }
 
 export class OceanEngine {
@@ -533,6 +552,10 @@ export class OceanEngine {
 
   private playerShip!: BuiltPlayerShip;
   private saveData: SaveData;
+  private remotePlayers = new Map<string, RemotePlayerShipView>();
+  private lastKnownCrew: CrewMember[] = [];
+  private multiplayerWorldSeed: number | null = null;
+  private pendingGoldLost = 0;
   private phase: 'title' | 'playing' | 'paused' | 'gameover' = 'title';
   private modalOpen = false;
   private activeModalKind: string | null = null;
@@ -1126,6 +1149,7 @@ export class OceanEngine {
     this.playerSinkingCause = '';
 
     this.saveData = JSON.parse(JSON.stringify(save));
+    if (this.saveData.player.crew.length > 0) this.lastKnownCrew = JSON.parse(JSON.stringify(this.saveData.player.crew));
     if (!Array.isArray(this.saveData.player.damageMarks)) this.saveData.player.damageMarks = [];
     if (!Array.isArray(this.saveData.seenTutorials)) this.saveData.seenTutorials = [];
     if (!Array.isArray(this.saveData.dismissedWarnings)) this.saveData.dismissedWarnings = [];
@@ -1195,6 +1219,207 @@ export class OceanEngine {
     this.camPitch = 0.28;
     this.camDist = 23;
     this.emitHud();
+  }
+
+  public setMultiplayerWorldSeed(seed: number): void {
+    if (!Number.isFinite(seed)) return;
+    const normalized = Math.max(1, Math.floor(seed));
+    this.multiplayerWorldSeed = normalized;
+    if (this.saveData.seed === normalized) return;
+    const snapshot = JSON.parse(JSON.stringify(this.getSaveSnapshot())) as SaveData;
+    snapshot.seed = normalized;
+    this.hydrateFromSave(snapshot);
+    this.callbacks.onSaveUpdate(this.getSaveSnapshot());
+    saveVoyageToStorage(this.getSaveSnapshot());
+  }
+
+  public applyMultiplayerSpawn(spawn: { x: number; z: number; heading?: number }): void {
+    const p = this.saveData.player;
+    p.x = Number.isFinite(spawn.x) ? spawn.x : 0;
+    p.z = Number.isFinite(spawn.z) ? spawn.z : 0;
+    p.heading = Number.isFinite(spawn.heading) ? spawn.heading! : 0;
+    p.speed = 0;
+    p.throttle = 0;
+    p.rudder = 0;
+    p.isStopping = true;
+    this.playerSinkingTimer = 0;
+    this.playerSinkingCause = '';
+    if (this.fps.active) this.fps.exitIsland();
+    this.rebuildPlayerShipMesh();
+    this.streamWorldAroundPlayer();
+    this.updateCamera(0.2);
+    this.callbacks.onSaveUpdate(this.getSaveSnapshot());
+    saveVoyageToStorage(this.getSaveSnapshot());
+  }
+
+  public getMultiplayerShipState(): Omit<RemotePlayerState, 'id' | 'name'> {
+    const p = this.saveData.player;
+    return {
+      shipName: p.shipName,
+      x: p.x,
+      z: p.z,
+      heading: p.heading,
+      speed: this.fps.active ? 0 : p.speed,
+      landed: this.fps.active,
+      hullTier: p.upgrades.hullTier,
+    };
+  }
+
+  public syncRemotePlayers(players: RemotePlayerState[]): void {
+    const activeIds = new Set(players.map((player) => player.id));
+    for (const [id, remote] of this.remotePlayers) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(remote.built.root);
+        remote.built.flagTexture.dispose();
+        remote.built.sailTexture?.dispose();
+        remote.nameTexture.dispose();
+        (remote.nameTag.material as THREE.SpriteMaterial).dispose();
+        this.remotePlayers.delete(id);
+      }
+    }
+
+    for (const player of players) {
+      if (!player?.id || !Number.isFinite(player.x) || !Number.isFinite(player.z)) continue;
+      const safeName = String(player.name || 'Captain').replace(/[<>]/g, '').slice(0, 22);
+      const safeShipName = String(player.shipName || 'Unnamed Vessel').replace(/[<>]/g, '').slice(0, 22);
+      const hullTier = clamp(Math.round(Number(player.hullTier) || 1), 1, 7);
+      let view = this.remotePlayers.get(player.id);
+
+      if (!view || view.hullTier !== hullTier) {
+        if (view) {
+          this.scene.remove(view.built.root);
+          view.built.flagTexture.dispose();
+          view.built.sailTexture?.dispose();
+          view.nameTexture.dispose();
+          (view.nameTag.material as THREE.SpriteMaterial).dispose();
+        }
+        const upgrades = { ...this.saveData.player.upgrades, hullTier };
+        const built = buildPlayerShip(upgrades, [], this.saveData.customFlag, this.textures);
+        const nameTagResult = this.createRemotePlayerNameTag(safeName);
+        built.root.add(nameTagResult.sprite);
+        nameTagResult.sprite.position.set(0, Math.max(13, built.halfLength * 0.78), 0);
+        this.scene.add(built.root);
+        view = {
+          id: player.id,
+          name: safeName,
+          shipName: safeShipName,
+          hullTier,
+          x: player.x,
+          z: player.z,
+          heading: player.heading || 0,
+          targetX: player.x,
+          targetZ: player.z,
+          targetHeading: player.heading || 0,
+          speed: player.speed || 0,
+          landed: Boolean(player.landed),
+          built,
+          nameTag: nameTagResult.sprite,
+          nameTexture: nameTagResult.texture,
+        };
+        this.remotePlayers.set(player.id, view);
+      } else {
+        view.targetX = player.x;
+        view.targetZ = player.z;
+        view.targetHeading = player.heading || 0;
+        view.speed = player.speed || 0;
+        view.landed = Boolean(player.landed);
+        view.shipName = safeShipName;
+        if (view.name !== safeName) {
+          const replacement = this.createRemotePlayerNameTag(safeName);
+          (view.nameTag.material as THREE.SpriteMaterial).dispose();
+          view.nameTag.material = replacement.sprite.material;
+          view.nameTexture.dispose();
+          view.nameTexture = replacement.texture;
+          view.name = safeName;
+        }
+      }
+    }
+  }
+
+  private createRemotePlayerNameTag(name: string): { sprite: THREE.Sprite; texture: THREE.CanvasTexture } {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'rgba(5, 15, 24, 0.88)';
+      ctx.strokeStyle = 'rgba(229, 190, 115, 0.95)';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.roundRect(8, 8, 496, 112, 18);
+      ctx.fill();
+      ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#e8bf73';
+      ctx.font = 'bold 23px Arial';
+      ctx.fillText('PLAYER', 256, 39);
+      ctx.fillStyle = '#fff5df';
+      ctx.font = 'bold 43px Arial';
+      ctx.fillText(name.toUpperCase(), 256, 83, 470);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(23, 5.75, 1);
+    return { sprite, texture };
+  }
+
+  private updateRemotePlayers(dt: number): void {
+    const wave = this.saveData.weather.waveIntensity;
+    for (const remote of this.remotePlayers.values()) {
+      const blend = 1 - Math.exp(-Math.max(0.001, dt) * 9);
+      remote.x += (remote.targetX - remote.x) * blend;
+      remote.z += (remote.targetZ - remote.z) * blend;
+      const angleDelta = normalizeAngle(remote.targetHeading - remote.heading);
+      remote.heading = normalizeAngle(remote.heading + angleDelta * blend);
+      const pose = computeBoatBuoyancy(
+        remote.x,
+        remote.z,
+        remote.heading,
+        remote.built.halfLength,
+        remote.built.halfBeam,
+        1.5,
+        0,
+        remote.landed ? 0 : remote.speed,
+        this.simTime,
+        wave,
+        this.rogueWaveBoost
+      );
+      remote.built.root.position.set(remote.x, pose.y, remote.z);
+      remote.built.root.rotation.order = 'YXZ';
+      remote.built.root.rotation.set(pose.pitch, remote.heading, pose.roll);
+      remote.nameTag.visible = true;
+      animateWavingFlag(remote.built.flagMesh, this.simTime, this.saveData.weather.windSpeed / 12);
+      for (const actor of remote.built.crewActors) {
+        const t = this.simTime * 1.4 + actor.phase;
+        actor.group.position.x = actor.baseX + Math.sin(t) * actor.patrolAmp;
+        actor.group.position.z = actor.baseZ + Math.cos(t * 0.85) * actor.patrolAmp;
+      }
+    }
+  }
+
+  public respawnAfterDeath(spawn: { x: number; z: number; heading?: number }): void {
+    const p = this.saveData.player;
+    p.x = Number.isFinite(spawn.x) ? spawn.x : 0;
+    p.z = Number.isFinite(spawn.z) ? spawn.z : 0;
+    p.heading = Number.isFinite(spawn.heading) ? spawn.heading! : p.heading;
+    p.speed = 0;
+    p.throttle = 0;
+    p.rudder = 0;
+    p.isStopping = true;
+    this.playerSinkingTimer = 0;
+    this.playerSinkingCause = '';
+    if (this.fps.active) this.fps.exitIsland();
+    this.rebuildPlayerShipMesh();
+    this.streamWorldAroundPlayer();
+    this.setPhase('playing');
+    const goldText = this.pendingGoldLost > 0 ? `You lost ${this.pendingGoldLost} gold.` : 'You had no gold to lose.';
+    this.pushNotification(`You returned to sea near another captain. Your ship, crew, cargo and upgrades were kept. ${goldText}`);
+    this.pendingGoldLost = 0;
+    this.flushImmediateSave();
   }
 
   public rebuildPlayerShipMesh(): void {
@@ -1624,7 +1849,7 @@ export class OceanEngine {
 
   public startNewVoyage(shipName?: string): void {
     clearVoyageStorage();
-    const fresh = createNewVoyage(undefined, shipName);
+    const fresh = createNewVoyage(this.multiplayerWorldSeed ?? undefined, shipName);
     this.hydrateFromSave(fresh);
     this.setPhase('playing');
     this.pushNotification(`${fresh.player.shipName} casts off at dawn! Explore trading lanes, wrecks, and distant pirate seas.`);
@@ -1980,6 +2205,7 @@ export class OceanEngine {
   }
 
   public getSaveSnapshot(): SaveData {
+    if (this.saveData.player.crew.length > 0) this.lastKnownCrew = JSON.parse(JSON.stringify(this.saveData.player.crew));
     this.saveData.exploredCells = Array.from(this.exploredCells);
     this.saveData.lootedWreckIds = Array.from(this.lootedWreckIds);
     this.saveData.collectedCrateIds = Array.from(this.collectedCrateIds);
@@ -4754,6 +4980,7 @@ export class OceanEngine {
   }
 
   private update(dt: number): void {
+    if (this.saveData.player.crew.length > 0) this.lastKnownCrew = JSON.parse(JSON.stringify(this.saveData.player.crew));
     const activeSim = this.phase === 'playing' && !this.modalOpen;
     if (this.phase !== 'paused') {
       this.simTime += dt;
@@ -4883,13 +5110,10 @@ export class OceanEngine {
         }
       }
       if (this.fps.playerHp <= 0) {
-        const deathRes = resolveExplorerDeath(this.saveData);
         this.fps.playerHp = 100;
-        this.rebuildPlayerShipMesh();
-        this.addLog('Explorer Lost Ashore', deathRes.message);
+        this.addLog('Explorer Lost Ashore', 'Your explorer was lost during the island expedition. The ship and crew will be retained.');
         this.boardShipFromIsland();
-        this.pushNotification(deathRes.message);
-        this.flushImmediateSave();
+        this.triggerPermadeath('Your explorer was lost during the island expedition.');
       }
     }
     this.updatePlayerPhysics(dt, oceanActive);
@@ -4902,6 +5126,7 @@ export class OceanEngine {
       this.updateCannonballs(dt);
     }
     this.updateParticles(dt);
+    this.updateRemotePlayers(dt);
     this.updateCamera(dt);
 
     if (activeSim) {
@@ -5566,6 +5791,7 @@ export class OceanEngine {
 
   private updateEntities(dt: number, activeSim: boolean): void {
     const oceanSim = activeSim && !this.fps.active;
+    const pirateSim = activeSim;
     const px = this.saveData.player.x;
     const pz = this.saveData.player.z;
     const w = this.saveData.weather;
@@ -6170,7 +6396,7 @@ export class OceanEngine {
         this.animateDamageMarksOnRoot(pMarks, pir.x, pir.z, emitWreckFireNow && dist < 260);
       }
 
-      if (oceanSim && !pir.defeated) {
+      if (pirateSim && !pir.defeated) {
         if (pir.hailCooldown > 0) pir.hailCooldown = Math.max(0, pir.hailCooldown - dt);
         if ((pir.ramCooldown ?? 0) > 0) pir.ramCooldown = Math.max(0, (pir.ramCooldown ?? 0) - dt);
         if ((pir.ramCommitTimer ?? 0) > 0) {
@@ -6195,15 +6421,17 @@ export class OceanEngine {
         const prevBehavior = pir.behavior;
         const isHunter = this.hunterIds.has(pir.id);
         const squadIdx = Math.max(0, engagedPirateIds.indexOf(pir.id));
+        const pirateTargetX = this.fps.active ? px + 20_000 : px;
+        const pirateTargetZ = this.fps.active ? pz + 20_000 : pz;
         const ai = computePirateAI(
           pir,
-          px,
-          pz,
+          pirateTargetX,
+          pirateTargetZ,
           this.saveData.player.upgrades.hullTier,
           inCombatWithThis,
           dt,
-          playerVx,
-          playerVz,
+          this.fps.active ? 0 : playerVx,
+          this.fps.active ? 0 : playerVz,
           isHunter,
           alliedToPlayer,
           escortAnchor,
@@ -6212,10 +6440,14 @@ export class OceanEngine {
             squadCount: Math.max(1, engagedPirateIds.length),
             playerCannons: this.saveData.player.upgrades.cannonCount,
             playerHullPct: this.saveData.player.condition.hull,
-            playerSpeed: Math.abs(this.saveData.player.speed),
+            playerSpeed: this.fps.active ? 0 : Math.abs(this.saveData.player.speed),
             simTime: this.simTime,
           }
         );
+        if (this.fps.active) {
+          ai.nextBehavior = 'patrol';
+          ai.wantsToFire = false;
+        }
         pir.behavior = ai.nextBehavior;
         if (pir.behavior === 'ram' && (pir.ramCommitTimer ?? 0) <= 0) {
           pir.ramCommitTimer = 4.5;
@@ -6678,7 +6910,7 @@ export class OceanEngine {
           }
 
           // Spectral ghost abilities in combat or close range
-          if (inCombatWithThis || dist < 195) {
+          if (inCombatWithThis || (!this.fps.active && dist < 195)) {
             pir.ghostAbilityTimer = (pir.ghostAbilityTimer ?? 7) - dt;
             if (pir.ghostAbilityTimer <= 0) {
               pir.ghostAbilityTimer = 9 + this.rand() * 5;
@@ -8615,15 +8847,35 @@ export class OceanEngine {
   private triggerPermadeath(cause: string): void {
     if (this.phase === 'gameover') return;
     this.saveData.stats.causeOfDeath = cause;
+    const player = this.saveData.player;
+    const lostGold = Math.max(0, Math.floor(player.gold || 0));
+    player.gold = 0;
+    // Keep the existing vessel and all other possessions. Restore only enough
+    // hull integrity to let the same ship sail again after respawning.
+    player.condition.hull = Math.max(48, player.condition.hull);
+    player.condition.flooding = 0;
+    player.speed = 0;
+    player.throttle = 0;
+    player.rudder = 0;
+    player.isStopping = true;
+    if (player.crew.length === 0 && this.lastKnownCrew.length > 0) {
+      player.crew = JSON.parse(JSON.stringify(this.lastKnownCrew));
+    }
+    this.playerSinkingTimer = 0;
+    this.playerSinkingCause = '';
     this.combat.active = false;
     this.combat.pirateId = null;
     this.combat.monsterId = null;
     this.combat.hostileMerchantId = null;
     this.combat.enemies = [];
     this.combat.primaryTargetId = null;
-    clearVoyageStorage();
-    this.callbacks.onSaveUpdate(this.getSaveSnapshot());
-    this.setPhase('gameover');
+    this.pendingGoldLost = lostGold;
+    const snapshot = this.getSaveSnapshot();
+    this.callbacks.onSaveUpdate(snapshot);
+    saveVoyageToStorage(snapshot);
+    this.callbacks.onPlayerDeath?.({ cause, lostGold });
+    this.pushNotification('Your ship was lost temporarily. Your other belongings are safe; respawning near another captain…');
+    if (!this.callbacks.onPlayerDeath) this.respawnAfterDeath({ x: 0, z: 0, heading: 0 });
   }
 
   private updateCannonballs(dt: number): void {
@@ -10314,6 +10566,14 @@ export class OceanEngine {
   public dispose(): void {
     this.disposed = true;
     this.fps.exitIsland();
+    for (const remote of this.remotePlayers.values()) {
+      this.scene.remove(remote.built.root);
+      remote.built.flagTexture.dispose();
+      remote.built.sailTexture?.dispose();
+      remote.nameTexture.dispose();
+      (remote.nameTag.material as THREE.SpriteMaterial).dispose();
+    }
+    this.remotePlayers.clear();
     cancelAnimationFrame(this.frameId);
     clearTimeout(this.frameId);
     window.removeEventListener('keydown', this.onKeyDown);
