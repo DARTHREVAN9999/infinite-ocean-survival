@@ -1,0 +1,1195 @@
+# GAME DEVELOPMENT PROMPT — OCEANBOUND: SURVIVAL OF THE SEAS
+
+Create a fully playable, extremely detailed **3D open-world ocean survival game** called **Oceanbound**. The player controls a boat sailing across an enormous, seemingly infinite ocean. The game should feel realistic, immersive and atmospheric, with detailed environments, convincing physics, meaningful progression, trading, exploration and strategic pirate battles.
+
+The game should start with the player commanding a small wooden boat and a crew of 10 sailors. Over time, the player can explore shipwrecks, rescue survivors, collect resources, discover gold, trade with merchant vessels, expand their ship, recruit crew members, install weapons and cannons, and eventually command a powerful naval vessel.
+
+The game should combine realistic sailing, ocean exploration, survival, ship management, resource gathering, a trading economy, crew management and strategic naval combat.
+
+**IMPORTANT:** This must be a real, functional game, not just a visual demonstration. Every major feature described below should actually work. Do not leave placeholder buttons, unfinished mechanics, fake interactions or empty menus. Prioritise making everything work properly before adding unnecessary features.
+
+---
+
+# 1. GRAPHICS AND VISUAL STYLE
+
+Create a beautiful, detailed 3D world with realistic lighting, water, weather and environmental effects.
+
+The overall visual style should be realistic rather than cartoony.
+
+### The ocean
+- The entire world should be an enormous, procedurally generated ocean.
+- The ocean should extend in every direction for as far as the player can travel.
+- There should be no visible map boundaries or obvious repeating patterns.
+- Use realistic water with animated waves, reflections, varying shades of blue and realistic lighting.
+- Waves should have different heights and shapes depending on weather conditions.
+- The ocean should look different during the day, sunset, night and storms.
+- Add realistic white foam around the boat when waves crash against it.
+- Add water splashes when the boat moves through the ocean.
+- The boat should leave a convincing wake behind it.
+- The water should visibly interact with the boat rather than simply acting as a flat animated surface.
+
+### The atmosphere
+Include:
+- Realistic clouds that move across the sky.
+- Changing weather conditions.
+- Fog that can reduce visibility.
+- Rain and thunderstorms.
+- Lightning during storms.
+- Beautiful sunrises and sunsets.
+- Realistic moonlight at night.
+- Stars visible in clear nighttime conditions.
+- Different ocean colours depending on lighting and weather.
+
+Make the world feel large, lonely and atmospheric.
+
+---
+
+# 2. PLAYER BOAT AND MOVEMENT
+
+The player starts on a small wooden sailing boat.
+
+The boat should have:
+- A detailed wooden hull.
+- A small mast and sail.
+- A steering wheel or tiller.
+- A small deck.
+- Visible ropes and other sailing equipment.
+- Storage areas for resources.
+- Spaces for the starting crew.
+- Realistic wooden textures and details.
+
+### Controls
+
+Use the following controls:
+
+- W — Move forwards / accelerate.
+- S — Slow down / reverse where physically possible.
+- A — Turn left.
+- D — Turn right.
+- Mouse — Look around the boat.
+- E — Interact with objects, crew members and locations.
+- J — Open the journal.
+- Tab — Open the ship management interface.
+- M — Open the map.
+- Escape — Open the pause menu.
+
+Allow the player to move the camera freely around their boat.
+
+### Realistic boat physics
+
+This is one of the most important features of the game.
+
+The boat must have convincing 3D physics.
+
+- The boat should constantly rise and fall with the ocean waves.
+- Large waves should cause the boat to rock from side to side.
+- The boat should pitch forwards and backwards depending on the waves.
+- The boat should tilt when turning.
+- The boat should physically react to strong winds.
+- The boat should have momentum and should not stop instantly.
+- Turning should feel slower and heavier than controlling a car.
+- Larger ships should be slower to turn but more stable.
+- Smaller boats should be more affected by large waves.
+- Strong waves should sometimes splash over the deck.
+- During storms, controlling the boat should become noticeably harder.
+
+The boat must remain properly aligned with the water surface. Avoid clipping through the water, floating unnaturally or randomly flipping over.
+
+The physics should feel believable without making the game frustrating.
+
+---
+
+# 3. THE JOURNAL
+
+The player should have a personal journal that can be opened at any time by pressing J.
+
+This should be a fully interactive journal where the player can actually write their own entries.
+
+### Journal features
+- Allow the player to type whatever they want.
+- Allow entries to be saved.
+- Display previous entries in chronological order.
+- Show the date and time when each entry was written.
+- Allow entries to be edited and deleted.
+- Give the journal an attractive old-fashioned nautical appearance.
+- Include a realistic paper background, ink-style text and page-turning animations if possible.
+
+Automatically create journal entries for important events, such as:
+- Discovering a shipwreck.
+- Finding gold.
+- Trading with a merchant.
+- Rescuing survivors.
+- Surviving a storm.
+- Winning or losing a pirate battle.
+- Discovering a new area.
+- Expanding the boat.
+- Losing crew members.
+
+Automatic entries should not prevent the player from writing their own entries.
+
+All journal entries must be saved between game sessions.
+
+---
+
+# 4. SHIPWRECK EXPLORATION AND TREASURE
+
+One of the main activities should be discovering detailed shipwrecks scattered throughout the ocean.
+
+Shipwrecks should spawn at different locations throughout the world, with different designs, conditions, resources and amounts of gold.
+
+### Shipwreck variety
+
+Create multiple types of shipwrecks, including:
+- Small fishing boats.
+- Abandoned merchant vessels.
+- Large wooden trading ships.
+- Destroyed military ships.
+- Pirate ships.
+- Large cargo vessels.
+- Old, partially sunken ships.
+- Ships damaged by storms.
+- Ships that appear to have been attacked in battle.
+
+Every shipwreck should look different.
+
+Some should be almost completely underwater, while others should be partially above the surface.
+
+Add realistic wreckage:
+- Broken masts.
+- Torn sails.
+- Damaged wooden decks.
+- Floating barrels.
+- Broken planks.
+- Damaged cannons.
+- Crates.
+- Rope.
+- Debris floating around the wreck.
+
+### Exploring wrecks
+
+The player should be able to approach a wreck and investigate it.
+
+When close enough:
+- Display an interaction prompt.
+- Allow the player to search different sections.
+- Show what resources and items they discover.
+- Allow the player to collect useful materials.
+- Allow survivors to be rescued.
+- Allow the player to discover and collect gold.
+- Show dangers associated with certain wrecks.
+
+Searching a wreck should take some time, making the player consider whether it is worth the risk.
+
+### Different treasure amounts
+
+**Every shipwreck should have a different possible amount of gold.**
+
+Some wrecks may contain no gold at all, while others may contain large amounts of treasure.
+
+For example:
+- Small fishing boats might contain 0–20 gold.
+- Abandoned small vessels might contain 5–50 gold.
+- Merchant ships might contain 50–300 gold.
+- Large trading ships might contain 200–800 gold.
+- Military ships might contain valuable supplies and occasionally large amounts of gold.
+- Rare treasure ships might contain thousands of gold.
+
+These are example ranges, not fixed amounts. Randomise the actual treasure found in each wreck.
+
+Gold should appear physically in appropriate places, such as:
+- Treasure chests.
+- Small coin piles.
+- Locked storage boxes.
+- Cargo containers.
+- Hidden compartments.
+
+Make searching for treasure exciting. Some valuable wrecks should be difficult to find and potentially dangerous to investigate.
+
+### Resources
+
+Include a variety of collectible resources:
+
+- Wood.
+- Iron.
+- Rope.
+- Cloth.
+- Food.
+- Fresh water.
+- Tools.
+- Gunpowder.
+- Cannonballs.
+- Medical supplies.
+- Valuable cargo.
+- Rare construction materials.
+- Gold.
+
+Resources should have different uses and different levels of rarity.
+
+Display the amount of each resource in the inventory.
+
+Do not make resources appear magically. They should physically exist in the world when appropriate, such as barrels, crates, treasure chests and floating debris.
+
+---
+
+# 5. GOLD AND THE ECONOMY
+
+Gold should be one of the most important resources in the entire game.
+
+The player should have to explore, collect treasure, defeat pirates and trade goods to earn enough gold to build a large and powerful ship.
+
+### Gold system
+
+Create a fully functional gold currency system.
+
+Display the player's current gold balance in the HUD and inventory.
+
+Gold can be obtained through:
+- Searching shipwrecks.
+- Discovering treasure chests.
+- Defeating pirate ships.
+- Looting captured enemy vessels.
+- Finding abandoned treasure.
+- Trading valuable cargo with merchant boats.
+- Completing special encounters or discoveries.
+
+Gold must have actual value and uses.
+
+The player should spend gold to:
+- Purchase wood, iron, rope and cloth.
+- Purchase food and fresh water.
+- Buy cannons and weapons.
+- Buy cannonballs and gunpowder.
+- Purchase better sails.
+- Buy ship upgrades.
+- Expand the hull and decks.
+- Purchase navigation equipment.
+- Hire additional crew members when available.
+- Purchase rare construction materials.
+- Repair their ship through merchants.
+
+The best ship upgrades should require a combination of gold and physical resources. Gold alone should not magically construct the ship.
+
+### Different treasure values
+
+The amount of gold found should vary significantly depending on what is discovered.
+
+A small wreck might contain only a handful of coins, whereas a large merchant ship might contain several valuable chests.
+
+Pirate vessels should also carry different amounts of gold depending on their size, crew and type.
+
+Make treasure discoveries feel rewarding without making gold so common that progression becomes meaningless.
+
+The player should have to make decisions about what to spend their money on.
+
+---
+
+# 6. MERCHANT AND TRADER SHIPS
+
+**Add merchant boats that travel across the ocean and allow the player to trade gold for resources, equipment and ship upgrades.**
+
+This should be a major gameplay feature.
+
+Merchant ships should be separate from pirate ships and should have their own AI, ship designs, crews and behaviour.
+
+### Merchant ship variety
+
+Create several kinds of merchant vessels:
+
+1. Small trading boats carrying basic supplies.
+2. Medium merchant ships carrying a variety of resources.
+3. Large cargo vessels carrying large quantities of supplies.
+4. Rare wealthy merchant ships carrying expensive and valuable goods.
+
+Each merchant ship should have:
+- Its own detailed 3D model.
+- A visible crew.
+- Cargo storage.
+- A different amount of available stock.
+- Different sailing speeds.
+- Different prices.
+- Different amounts of gold they are carrying.
+
+Merchant ships should travel around the ocean rather than simply spawning beside the player and remaining stationary.
+
+They should travel between randomly generated trade routes and occasionally cross the player's path.
+
+Some merchants should be common, while others should be rare discoveries.
+
+### Finding merchants
+
+The player should be able to:
+- Spot merchant ships in the distance.
+- Approach them.
+- Signal or communicate with them.
+- Ask to trade.
+- View their available stock.
+- Purchase items.
+- Sell resources and valuable cargo.
+
+Display an interaction prompt when the player gets close enough.
+
+When the player initiates trading, open a detailed trading interface.
+
+### Trading interface
+
+Create a polished trading menu with two sections:
+
+**Merchant inventory:**
+- Wood.
+- Iron.
+- Rope.
+- Cloth.
+- Food.
+- Fresh water.
+- Gunpowder.
+- Cannonballs.
+- Medical supplies.
+- Tools.
+- Cannons.
+- Sails.
+- Ship upgrade materials.
+- Rare equipment.
+
+**Player inventory:**
+- Current resources.
+- Available cargo.
+- Gold balance.
+- Items available for sale.
+
+Display the price of every item.
+
+Allow the player to choose how many units they want to purchase or sell.
+
+Show the total price before confirming a transaction.
+
+Make sure the player cannot purchase something if they do not have enough gold or cargo space.
+
+Once a trade is confirmed:
+- Deduct the gold.
+- Add purchased resources to the player's inventory.
+- Remove purchased items from the merchant's stock.
+- Add sold goods to the merchant's stock.
+- Pay the player for sold goods.
+
+All transactions must work properly.
+
+### Merchant prices and stock
+
+Merchants should not all have identical stock or prices.
+
+For example:
+- A small trading boat might carry lots of food and basic wood.
+- A large merchant might carry iron, rope, cloth and construction materials.
+- A wealthy merchant might carry cannons, gunpowder and rare equipment.
+- A merchant with limited supplies might charge more.
+- A merchant with abundant supplies might offer cheaper prices.
+
+Create some variation in prices based on the merchant, available stock and resource rarity.
+
+Some merchants may have better prices for certain materials than others.
+
+Allow the player to find merchants that specialise in particular goods.
+
+### Merchant encounters
+
+Merchants should behave realistically.
+
+They should:
+- Sail around the world.
+- Occasionally travel in groups.
+- Avoid dangerous pirate ships where possible.
+- Have crew members working on their decks.
+- Be able to change direction.
+- Continue travelling after the player finishes trading.
+
+Some merchant ships could be attacked by pirates.
+
+The player should be able to intervene and protect them, although this should be optional.
+
+Merchant ships should not be completely invincible. If attacked, they can take damage and lose cargo.
+
+Some merchants might offer valuable trading opportunities, while others may have very limited supplies.
+
+Make discovering a large merchant vessel exciting because it could provide the materials needed to expand and improve the player's ship.
+
+---
+
+# 7. CREW SYSTEM
+
+The player starts with **10 crew members**.
+
+Crew members are important because they help operate the boat, maintain it, gather resources and participate in strategic battles.
+
+### Crew management
+
+Create a detailed crew management menu.
+
+Display:
+- Total crew members.
+- Available crew members.
+- Crew assigned to sailing.
+- Crew assigned to repairs.
+- Crew assigned to cannons.
+- Crew assigned to other responsibilities.
+- Individual crew health.
+- Crew morale.
+- Food and water consumption.
+
+Crew members should have individual appearances and names.
+
+Give them different characteristics, such as:
+- Sailing skill.
+- Combat skill.
+- Repair skill.
+- Navigation skill.
+- Strength.
+
+Some crew members should be better at certain tasks than others.
+
+### Crew behaviour
+
+Crew members should visibly move around the deck and perform their assigned tasks.
+
+For example:
+- Sailors operate the sails.
+- Other crew members repair damaged sections.
+- Gun crews prepare cannons.
+- Crew members carry supplies.
+- Crew members stand watch.
+- Injured crew members should rest.
+
+Make the ship feel alive rather than having crew members simply standing still.
+
+### Recruiting survivors
+
+Survivors found in shipwrecks can be invited to join the player's crew.
+
+However, not every survivor should automatically agree.
+
+Some may:
+- Join immediately.
+- Demand food or supplies.
+- Need medical treatment.
+- Refuse to join.
+- Offer useful information.
+- Have valuable skills.
+
+The player should be able to grow their crew significantly over time.
+
+However, larger crews consume more food and water, so the player must manage supplies properly.
+
+Crew members can die in storms, pirate battles and other dangerous events.
+
+Their loss should matter.
+
+---
+
+# 8. SHIP EXPANSION AND UPGRADES
+
+The player's boat should not remain small forever.
+
+As the player collects resources and earns gold, they should be able to expand their boat.
+
+Create a detailed ship upgrade system.
+
+### Hull expansion
+
+Allow the player to:
+- Expand the length of their boat.
+- Expand its width.
+- Add additional deck space.
+- Add another level or deck.
+- Improve its hull strength.
+- Improve its stability.
+- Increase its cargo capacity.
+- Increase the number of crew members it can support.
+
+### Ship additions
+
+Allow the player to install:
+- Larger sails.
+- Additional masts.
+- Better steering equipment.
+- Storage rooms.
+- Food storage.
+- Water storage.
+- Crew sleeping areas.
+- Medical areas.
+- Repair stations.
+- Navigation equipment.
+- Crow's nests.
+- Wooden railings.
+- Armour plating.
+- Different decorations.
+
+### Weapons
+
+Allow the player to install different weapons.
+
+Include:
+- Small deck cannons.
+- Medium cannons.
+- Heavy cannons.
+- Swivel guns.
+- Improved cannons with longer range.
+- Defensive weapons.
+
+Each weapon should have different:
+- Damage.
+- Range.
+- Reload time.
+- Accuracy.
+- Crew requirements.
+
+Weapons should be visible on the actual ship.
+
+### Purchasing upgrades
+
+Upgrades should have actual costs.
+
+For example:
+- Expanding the hull requires wood, iron and gold.
+- Adding another deck requires wood, rope and gold.
+- Installing cannons requires cannons, iron, gunpowder and gold.
+- Improving sails requires cloth, rope and gold.
+- Adding storage requires wood and gold.
+- Adding armour requires iron and gold.
+
+Display the required materials and gold before allowing an upgrade.
+
+Make upgrades meaningful and progressively more expensive.
+
+### Visual upgrades
+
+IMPORTANT: When the player upgrades their boat, its actual 3D model must change.
+
+Do not simply increase a number in a menu.
+
+For example, installing another deck should visibly add another deck, and installing cannons should place actual cannons on the ship.
+
+Make upgrades look physically connected to the boat.
+
+The player should gradually progress from a tiny sailing boat to a large, heavily armed vessel.
+
+---
+
+# 9. PIRATES AND RANDOM ENCOUNTERS
+
+Pirates should be one of the main dangers in the ocean.
+
+They should appear naturally throughout the world, sometimes travelling in groups and sometimes sailing alone.
+
+Pirate encounters should be unpredictable.
+
+### Pirate ship variety
+
+Create several different pirate ships:
+
+1. Small pirate boats with small crews.
+2. Medium pirate ships with moderate crews and several cannons.
+3. Large pirate ships with lots of crew and powerful weapons.
+4. Rare, extremely dangerous pirate vessels.
+
+Each pirate ship should have a different model, size, crew capacity and weapon arrangement.
+
+Pirate crews should vary in size.
+
+A small pirate boat might have 5–10 pirates, while a large pirate ship could have 30–50 or more.
+
+Pirates should be able to:
+- Sail around the ocean.
+- Patrol certain areas.
+- Search for ships to attack.
+- Pursue the player.
+- Attempt to surround the player.
+- Retreat if heavily damaged.
+- Attack merchant ships.
+- Attack other ships when appropriate.
+
+Their ships should also have realistic ocean physics.
+
+### Pirate treasure and gold
+
+**Pirate ships should carry different amounts of gold depending on their size, strength and wealth.**
+
+Some pirate ships might carry almost no gold, while others might have large amounts of stolen treasure.
+
+For example:
+- Small pirate boats might carry 0–30 gold.
+- Medium pirate ships might carry 30–150 gold.
+- Large pirate ships might carry 100–500 gold.
+- Rare wealthy pirate vessels might carry 500–2,000 or more gold.
+
+Randomise the actual amounts so every encounter feels different.
+
+Some pirate ships should also carry stolen cargo, construction materials, food, weapons and other valuable resources.
+
+When the player defeats a pirate ship, they should be able to recover its treasure and loot its remaining cargo.
+
+The larger and more dangerous the pirate ship, the greater the potential reward.
+
+However, do not make every large pirate ship guaranteed to contain huge amounts of gold.
+
+### Pirate interactions
+
+When pirates approach the player's boat, they should communicate with the player.
+
+They might:
+- Demand resources.
+- Demand food or water.
+- Demand valuable cargo.
+- Demand gold.
+- Threaten to attack.
+- Offer a deal.
+
+The player should be able to choose whether to surrender some resources or gold or fight back.
+
+Surrendering should have consequences because the player loses supplies or money, but it may save the crew.
+
+Pirates should not always make the same demands.
+
+---
+
+# 10. STRATEGIC NAVAL COMBAT
+
+**Pirate battles must be strategic rather than a direct first-person fighting game.**
+
+The player should not personally swing swords or shoot individual enemies.
+
+Instead, they command their ship and crew during naval battles.
+
+Combat should focus on positioning, timing, decisions, crew allocation and ship capabilities.
+
+### How battles work
+
+When an enemy ship attacks:
+- The camera should provide a good view of both ships.
+- The player should still be able to steer their boat.
+- Enemy ships should manoeuvre independently.
+- Crew members should automatically perform their assigned combat tasks.
+- Cannons should visibly fire.
+- Cannonballs should travel through the air.
+- Cannon impacts should cause visible damage.
+- Ships should take on damage over time.
+
+### Player combat decisions
+
+Allow the player to make important tactical decisions, including:
+
+- Attack with all cannons.
+- Focus fire on one side of the enemy ship.
+- Aim for the enemy sails.
+- Aim for the enemy hull.
+- Aim for the enemy cannons.
+- Focus on damaging the enemy steering.
+- Retreat.
+- Attempt to escape.
+- Surrender.
+- Protect damaged parts of the player's ship.
+- Assign additional crew to the cannons.
+- Assign crew to repairing damage.
+
+Different targets should have different effects.
+
+For example:
+- Damaging sails reduces enemy speed.
+- Damaging the steering makes turning harder.
+- Damaging cannons reduces enemy firepower.
+- Damaging the hull causes flooding.
+- Damaging crew areas can cause crew casualties.
+
+### Enemy AI
+
+Pirate ships should make intelligent decisions.
+
+They should:
+- Try to get into firing range.
+- Position themselves to use their cannons effectively.
+- Avoid constantly crashing into the player.
+- Attempt to attack the weakest side of the player's ship.
+- Retreat when their ship is badly damaged.
+- Change strategies depending on the player's ship.
+
+### Battle outcomes
+
+Winning should give the player opportunities to:
+- Collect enemy gold.
+- Collect enemy resources.
+- Take valuable cargo.
+- Rescue captured survivors.
+- Recruit enemy sailors.
+- Collect weapons and ammunition.
+- Repair their ship using recovered materials.
+- Capture an enemy ship if it is sufficiently damaged and the situation allows it.
+
+The player should be able to discover valuable treasure by defeating particularly wealthy pirate ships.
+
+Losing a battle should be extremely serious.
+
+**If the player's ship is destroyed or their crew is defeated, the player dies and must restart the game from the beginning.**
+
+This means:
+- The player's current ship is lost.
+- The player's crew is lost.
+- Their collected resources are lost.
+- Their gold is lost.
+- Their ship upgrades are lost.
+- Their previous exploration progress is lost.
+
+Start a completely new survival run.
+
+Make this a meaningful survival experience where every decision matters.
+
+---
+
+# 11. SHIP DAMAGE AND REPAIR SYSTEM
+
+Ships should have individual damage systems.
+
+Different parts of the ship should be able to take damage.
+
+Include:
+- Hull damage.
+- Sail damage.
+- Mast damage.
+- Steering damage.
+- Cannon damage.
+- Deck damage.
+
+Display the ship's condition in the ship management menu.
+
+### Damage effects
+
+Damage must actually affect gameplay.
+
+Examples:
+- Hull damage causes water to enter the boat.
+- Severe leaks slowly flood the ship.
+- Damaged sails reduce movement speed.
+- Broken masts reduce sailing effectiveness.
+- Damaged steering makes turning difficult.
+- Destroyed cannons cannot fire.
+- Damaged sections may require several crew members to repair.
+
+### Repairs
+
+Allow crew members to repair the boat using wood, rope, iron and other materials.
+
+The player should choose which sections to repair first.
+
+Repairs should take time.
+
+During storms or battles, repairing the ship should be harder.
+
+Merchant ships should also be able to sell repair materials and equipment.
+
+---
+
+# 12. SURVIVAL SYSTEMS
+
+The player must manage their crew's survival.
+
+Include the following systems:
+
+### Food
+- Every crew member consumes food over time.
+- Food can be collected from shipwrecks.
+- Food can be purchased from merchants.
+- Food can be acquired through other encounters.
+- Running out of food reduces crew morale and eventually causes starvation.
+
+### Fresh water
+- Crew members need fresh water.
+- Water should be stored in barrels or tanks.
+- Water can be collected from wrecks or purchased from merchants.
+- Running out of water causes dehydration.
+
+### Morale
+
+Crew morale should change depending on conditions.
+
+Morale increases when:
+- The crew has enough food and water.
+- The player wins battles.
+- The crew discovers valuable supplies.
+- The ship is upgraded.
+- The player rescues new survivors.
+- The crew receives good rewards.
+
+Morale decreases when:
+- Crew members die.
+- The ship is badly damaged.
+- Supplies run low.
+- The ship spends too long in dangerous conditions.
+- The player repeatedly surrenders to pirates.
+
+Low morale should affect crew efficiency.
+
+### Health
+
+Crew members can become:
+- Injured.
+- Sick.
+- Exhausted.
+- Dehydrated.
+- Starving.
+
+Medical supplies should be used to treat injuries.
+
+Do not make survival unnecessarily complicated, but make these systems meaningful.
+
+---
+
+# 13. WORLD GENERATION AND EXPLORATION
+
+The ocean should be procedurally generated so the player can explore for a very long time.
+
+Generate locations around the player as they travel.
+
+Do not generate the entire infinite world at once.
+
+Use efficient world streaming so distant objects are loaded when necessary and removed or stored when they are far away.
+
+### Random discoveries
+
+The player should encounter different things while travelling, including:
+- Shipwrecks.
+- Floating supply crates.
+- Abandoned boats.
+- Pirate ships.
+- Merchant ships.
+- Survivors on small rafts.
+- Groups of hostile ships.
+- Other abandoned vessels.
+- Strange floating objects.
+- Rare treasure discoveries.
+
+Each encounter should have a chance of appearing, and encounters should not all feel identical.
+
+### Navigation and map
+
+Create an interactive map that records the player's discoveries.
+
+Include:
+- Current player location.
+- Discovered shipwrecks.
+- Known merchant encounters.
+- Discovered pirate encounters.
+- Previously explored areas.
+- A compass.
+- Direction of travel.
+
+The player should begin with very little information about the surrounding ocean.
+
+As they explore, the map should gradually become more useful.
+
+Avoid filling the map with locations that the player has not discovered.
+
+---
+
+# 14. WEATHER AND OCEAN EVENTS
+
+Weather should affect gameplay, not just appearance.
+
+Include:
+- Calm weather.
+- Light winds.
+- Strong winds.
+- Heavy rain.
+- Rough seas.
+- Thunderstorms.
+- Extremely dangerous storms.
+
+During storms:
+- Waves should become much larger.
+- The boat should rock violently.
+- Visibility should decrease.
+- Wind should push the boat.
+- Crew members should move less efficiently.
+- Ship damage and flooding risks should increase.
+
+Occasionally generate unusually large waves that can seriously threaten a small boat.
+
+The player should be able to monitor weather conditions.
+
+Make storms dramatic, difficult and visually impressive.
+
+---
+
+# 15. USER INTERFACE AND MENUS
+
+Create a polished, immersive user interface that fits the nautical theme.
+
+The interface should be easy to understand and should not cover too much of the screen.
+
+### Main HUD
+
+Display:
+- Ship health.
+- Ship speed.
+- Crew count.
+- Food supplies.
+- Fresh water supplies.
+- Resource inventory.
+- Current gold balance.
+- Weather conditions.
+- Time of day.
+- Current objective or discovery notification.
+
+### Main menus
+
+**Ship Management**
+- Ship condition.
+- Ship upgrades.
+- Crew assignments.
+- Installed weapons.
+- Storage capacity.
+- Upgrade prices and required resources.
+
+**Inventory**
+- All collected resources.
+- Amount of each resource.
+- Gold balance.
+- Cargo capacity.
+- Resource descriptions.
+
+**Trading**
+- Merchant inventory.
+- Merchant prices.
+- Player inventory.
+- Buy and sell options.
+- Current transaction total.
+- Gold balance after purchase.
+
+**Crew**
+- Individual crew members.
+- Names.
+- Skills.
+- Health.
+- Morale.
+- Assigned tasks.
+
+**Journal**
+- Player-written entries.
+- Automatic discovery entries.
+- Editable and saved pages.
+
+**Map**
+- Current location.
+- Discovered places.
+- Compass.
+- Exploration history.
+
+**Settings**
+- Graphics settings.
+- Audio volume.
+- Mouse sensitivity.
+- Controls.
+- Performance options.
+
+The interface should look like a realistic nautical survival game, with wooden textures, parchment, brass details and subtle animations.
+
+---
+
+# 16. GAME PROGRESSION
+
+The game should have a long-term progression system.
+
+The player should start extremely weak and gradually become more powerful.
+
+### Starting situation
+
+The player begins with:
+- A small wooden boat.
+- 10 crew members.
+- Basic sailing equipment.
+- No cannons.
+- Limited storage.
+- Basic food and water.
+- Very little spare wood, rope or iron.
+- A small amount of starting gold.
+
+### Early game
+
+The player should focus on:
+- Learning to control the boat.
+- Discovering nearby shipwrecks.
+- Gathering basic resources.
+- Finding food and water.
+- Finding gold.
+- Rescuing survivors.
+- Discovering merchant ships.
+- Buying their first additional supplies.
+- Avoiding dangerous pirate ships.
+- Keeping the crew alive.
+
+### Mid game
+
+The player should be able to:
+- Expand the boat.
+- Recruit a larger crew.
+- Install their first cannons.
+- Improve storage.
+- Repair their ship more efficiently.
+- Trade with different merchants.
+- Search for valuable shipwrecks.
+- Save gold for expensive upgrades.
+- Fight smaller pirate ships.
+- Discover larger and more valuable wrecks.
+
+### Late game
+
+The player should be able to:
+- Command a very large ship.
+- Have a substantial crew.
+- Install several powerful cannons.
+- Survive extremely dangerous storms.
+- Fight large pirate vessels.
+- Capture enemy ships.
+- Trade with wealthy merchant vessels.
+- Discover rare treasure ships.
+- Explore much more dangerous areas.
+
+Progression should feel rewarding.
+
+Upgrades should require genuine resources and gold and should take enough effort to make them meaningful.
+
+There should always be a reason to keep exploring and earning more gold.
+
+---
+
+# 17. AUDIO AND IMMERSION
+
+Sound design is extremely important.
+
+Include:
+- Realistic ocean waves.
+- Wind blowing through the sails.
+- Wooden boat creaking.
+- Ropes moving.
+- Sails flapping.
+- Crew members talking occasionally.
+- Footsteps on wooden decks.
+- Distant thunder.
+- Rain hitting the boat.
+- Cannon fire.
+- Cannonball impacts.
+- Wood breaking.
+- Water flooding the ship.
+- Shipwreck creaking sounds.
+- Ambient nighttime sounds.
+- Merchant crew announcements and trading interactions.
+
+Music should be atmospheric and occasional.
+
+Do not have loud background music constantly playing.
+
+The ocean, boat and crew should provide most of the atmosphere.
+
+---
+
+# 18. IMPORTANT TECHNICAL REQUIREMENTS
+
+The final game must be fully playable and functional.
+
+If developing this as a browser game, build it using HTML, CSS and JavaScript with a suitable 3D engine such as Three.js.
+
+The game should run directly in a modern browser without requiring the player to install additional software or use a complicated development environment.
+
+### Performance
+
+This game will contain a large ocean, boats, crew members, shipwrecks, particles, waves, merchants and many other objects.
+
+Optimise the game carefully:
+- Use procedural generation.
+- Use level-of-detail systems.
+- Use efficient water rendering.
+- Use object pooling for repeated effects.
+- Use efficient collision detection.
+- Limit unnecessary physics calculations.
+- Only simulate distant objects when necessary.
+- Use instancing where appropriate.
+- Avoid creating thousands of unnecessary objects.
+- Stream the world as the player moves.
+
+**Do not make the game extremely laggy just to add visual detail.** Maintain good performance while keeping the world visually impressive.
+
+### Saving
+
+Create a proper save system.
+
+Save:
+- Player location.
+- Boat configuration.
+- Boat upgrades.
+- Crew members and their conditions.
+- Resources.
+- Gold balance.
+- Journal entries.
+- Discovered locations.
+- Exploration progress.
+- Merchant stock and relevant world state.
+- Current weather and world state where appropriate.
+
+Autosave regularly and provide a manual save option.
+
+The game should preserve the player's progress after closing and reopening the browser.
+
+Permadeath should only occur when the player actually dies, not because the browser closes or the game crashes.
+
+### Quality requirements
+
+- No invisible walls in the ocean.
+- No boats floating unnaturally.
+- No objects randomly appearing directly in front of the player.
+- No broken menus.
+- No resources that cannot be collected.
+- No crew members that do nothing.
+- No pirate or merchant ships that remain stationary.
+- No trading menus with fake transactions.
+- No gold that can be spent without being deducted.
+- No resources that appear without being collected or purchased.
+- No combat that is simply a collection of random explosions.
+- No placeholder graphics for important features.
+- No unfinished mechanics.
+- No fake buttons.
+- No game-breaking bugs.
+
+Make sure all controls work and that the player can actually progress from the starting boat to a much larger ship.
+
+---
+
+# 19. FINAL DEVELOPMENT INSTRUCTIONS
+
+Build the game in a logical order, but the final result must include all the systems described above.
+
+Prioritise these features above everything else:
+
+1. Beautiful, detailed 3D ocean.
+2. Realistic boat movement and wave physics.
+3. Fully functional exploration and shipwreck generation.
+4. Different treasure and gold amounts in shipwrecks.
+5. Resource collection.
+6. Merchant ship AI and fully functional trading.
+7. A meaningful gold economy.
+8. Crew recruitment and management.
+9. Physical ship expansion and upgrades.
+10. Intelligent pirate encounters.
+11. Different pirate ship sizes, crews and treasure amounts.
+12. Strategic naval battles.
+13. Survival and ship damage.
+14. Interactive journal and persistent saving.
+
+The most important thing is that the game feels like a real adventure.
+
+I want to feel like I am genuinely sailing across a massive, dangerous ocean with 10 sailors, slowly building a tiny boat into a powerful ship.
+
+I want to discover abandoned wrecks, find hidden treasure, rescue survivors, meet merchant ships, buy resources with my gold, upgrade my ship and eventually become powerful enough to take on much larger pirate vessels.
+
+The trading system should be genuinely useful. Merchant ships should provide an alternative to searching wrecks for every resource, and collecting gold should give the player a clear reason to explore, fight pirates and search for treasure.
+
+There should always be something interesting to discover, but the ocean should also feel vast, lonely and sometimes dangerous.
+
+**Make the game extremely detailed, immersive, realistic and fun to play. Do not simplify the gameplay systems just to finish faster. Do not remove features without replacing them with fully working alternatives.**
+
+Deliver the complete playable game, not just a plan or an explanation of how it could be made.
