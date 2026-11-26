@@ -1,405 +1,345 @@
 import express from 'express';
-import http from 'node:http';
+import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WebSocketServer, WebSocket } from 'ws';
-import pg from 'pg';
+import { WebSocket, WebSocketServer } from 'ws';
 
-const { Pool } = pg;
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT || 3000);
-const WORLD_SEED = 20261126;
-const MAX_NAME_LENGTH = 32;
-const MAX_PLAYERS = 40;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PORT = Number(process.env.PORT || 10000);
+const WORLD_SEED = Number(process.env.WORLD_SEED || 731296);
+const MAX_PLAYERS = Math.max(2, Math.min(200, Number(process.env.MAX_PLAYERS || 32)));
+const SERVER_STARTED_AT = Date.now();
+const WEATHER_TYPES = new Set([
+  'calm', 'clear', 'light_winds', 'strong_winds', 'light_rain', 'heavy_rain', 'hail',
+  'severe_hail', 'snow', 'blizzard', 'thunderstorm', 'lightning_storm', 'hurricane',
+  'tornado', 'dense_fog', 'heatwave',
+]);
+
+const players = new Map();
+let worldLeaderId = null;
+let sharedWeather = null;
+let sharedWorldPirates = [];
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '5mb' }));
-
-const pool = process.env.DATABASE_URL
-  ? new Pool({
-      connectionString: process.env.DATABASE_URL,
-      max: 5,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
-    })
-  : null;
-
-const memoryProfiles = new Map();
-const players = new Map();
-const lootedWreckSections = new Set();
-let sharedWeatherType = null;
-
-let databaseReady = Promise.resolve();
-if (pool) {
-  databaseReady = pool.query(`
-    CREATE TABLE IF NOT EXISTS ocean_player_profiles (
-      player_id TEXT PRIMARY KEY,
-      save_data JSONB NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `).then(() => undefined).catch((error) => {
-    console.error('Could not initialise the player-profile table:', error.message);
-    throw error;
+app.get('/healthz', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'infinite-ocean-survival',
+    onlinePlayers: players.size,
+    worldLeader: worldLeaderId,
+    uptimeSeconds: Math.floor((Date.now() - SERVER_STARTED_AT) / 1000),
   });
-} else {
-  console.warn('DATABASE_URL is not set. Player saves will only survive while this server process is running.');
+});
+app.use(express.static(path.join(__dirname, 'dist'), { extensions: ['html'] }));
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+const httpServer = createServer(app);
+const wss = new WebSocketServer({ server: httpServer, path: '/multiplayer', maxPayload: 256 * 1024 });
+
+function clamp(value, min, max, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
 }
 
-function validPlayerId(value) {
-  return typeof value === 'string' && /^[a-zA-Z0-9_-]{8,80}$/.test(value);
-}
-
-function cleanName(value) {
-  const name = String(value || 'Unknown Captain')
-    .replace(/[<>\u0000-\u001f]/g, '')
-    .trim()
-    .slice(0, MAX_NAME_LENGTH);
-  return name || 'Unknown Captain';
+function cleanName(value, fallback) {
+  const name = String(value ?? '').replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, 22);
+  return name || fallback;
 }
 
 function publicPlayer(player) {
-  if (!player?.state) return null;
   return {
     id: player.id,
     name: player.name,
-    x: player.state.x,
-    z: player.state.z,
-    heading: player.state.heading,
-    speed: player.state.speed,
-    landed: Boolean(player.state.landed),
-    ship: player.state.ship,
+    shipName: player.shipName,
+    x: player.x,
+    z: player.z,
+    heading: player.heading,
+    speed: player.speed,
+    landed: player.landed,
+    hullTier: player.hullTier,
+    lastSeen: player.lastSeen,
   };
 }
 
-function send(socket, payload) {
-  if (socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(payload));
-  }
+function send(ws, payload) {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
 }
 
 function broadcast(payload, exceptId = null) {
   const encoded = JSON.stringify(payload);
-  for (const [id, player] of players) {
-    if (id === exceptId || player.socket.readyState !== WebSocket.OPEN) continue;
-    player.socket.send(encoded);
+  for (const player of players.values()) {
+    if (player.id !== exceptId && player.ws.readyState === WebSocket.OPEN) player.ws.send(encoded);
   }
 }
 
-function findSpawn() {
-  const online = [...players.values()]
-    .filter((player) => player.state && Date.now() - player.lastUpdate < 15_000);
-  if (online.length === 0) return { x: 0, z: 0 };
-  const anchor = online[Math.floor(Math.random() * online.length)].state;
+function chooseNearbySpawn(exceptId = null) {
+  const candidates = [...players.values()].filter((p) => p.id !== exceptId);
+  if (candidates.length === 0) return { x: 0, z: 0, heading: 0 };
+  const anchor = candidates[Math.floor(Math.random() * candidates.length)];
   const angle = Math.random() * Math.PI * 2;
-  const distance = 65 + Math.random() * 35;
+  const distance = 95 + Math.random() * 55;
+  const x = anchor.x + Math.cos(angle) * distance;
+  const z = anchor.z + Math.sin(angle) * distance;
+  return { x, z, heading: Math.atan2(anchor.x - x, anchor.z - z) };
+}
+
+function normalizeState(input, previous = {}) {
+  const state = input && typeof input === 'object' ? input : {};
   return {
-    x: Math.round((anchor.x + Math.cos(angle) * distance) * 10) / 10,
-    z: Math.round((anchor.z + Math.sin(angle) * distance) * 10) / 10,
+    x: clamp(state.x, -5_000_000, 5_000_000, previous.x ?? 0),
+    z: clamp(state.z, -5_000_000, 5_000_000, previous.z ?? 0),
+    heading: clamp(state.heading, -Math.PI * 100, Math.PI * 100, previous.heading ?? 0),
+    speed: clamp(state.speed, -80, 80, previous.speed ?? 0),
+    landed: Boolean(state.landed),
+    hullTier: Math.round(clamp(state.hullTier, 1, 7, previous.hullTier ?? 1)),
   };
 }
 
-async function readProfile(id) {
-  if (pool) {
-    await databaseReady;
-    const result = await pool.query(
-      'SELECT save_data FROM ocean_player_profiles WHERE player_id = $1',
-      [id]
-    );
-    return result.rows[0]?.save_data ?? null;
-  }
-  return memoryProfiles.get(id) ?? null;
-}
-
-async function writeProfile(id, save) {
-  const safeSave = structuredClone(save);
-  safeSave.seed = WORLD_SEED;
-  if (pool) {
-    await databaseReady;
-    await pool.query(
-      `INSERT INTO ocean_player_profiles (player_id, save_data, updated_at)
-       VALUES ($1, $2::jsonb, NOW())
-       ON CONFLICT (player_id) DO UPDATE
-       SET save_data = EXCLUDED.save_data, updated_at = NOW()`,
-      [id, JSON.stringify(safeSave)]
-    );
-  } else {
-    memoryProfiles.set(id, safeSave);
-  }
-}
-
-app.get('/health', async (_req, res) => {
-  try {
-    if (pool) {
-      await databaseReady;
-      await pool.query('SELECT 1');
+// Server-authoritative circular hull collision. Clients receive corrected
+// positions, so two locally controlled ships cannot simply pass through each other.
+function resolveShipCollisions(changedPlayer) {
+  const affected = new Set();
+  for (let pass = 0; pass < 3; pass++) {
+    for (const other of players.values()) {
+      if (other.id === changedPlayer.id) continue;
+      const dx = changedPlayer.x - other.x;
+      const dz = changedPlayer.z - other.z;
+      const distance = Math.hypot(dx, dz);
+      const radiusA = 18 + changedPlayer.hullTier * 1.5;
+      const radiusB = 18 + other.hullTier * 1.5;
+      const minimum = radiusA + radiusB;
+      if (distance >= minimum) continue;
+      const nx = distance > 0.001 ? dx / distance : (changedPlayer.id < other.id ? 1 : -1);
+      const nz = distance > 0.001 ? dz / distance : 0;
+      const overlap = minimum - distance + 0.35;
+      affected.add(changedPlayer);
+      if (changedPlayer.landed && !other.landed) {
+        other.x -= nx * overlap;
+        other.z -= nz * overlap;
+        other.speed = Math.min(other.speed, -Math.abs(other.speed) * 0.45);
+        affected.add(other);
+      } else if (other.landed && !changedPlayer.landed) {
+        changedPlayer.x += nx * overlap;
+        changedPlayer.z += nz * overlap;
+        changedPlayer.speed = Math.min(changedPlayer.speed, -Math.abs(changedPlayer.speed) * 0.45);
+      } else {
+        changedPlayer.x += nx * overlap * 0.5;
+        changedPlayer.z += nz * overlap * 0.5;
+        other.x -= nx * overlap * 0.5;
+        other.z -= nz * overlap * 0.5;
+        changedPlayer.speed *= 0.72;
+        other.speed *= 0.72;
+        affected.add(other);
+      }
+      affected.add(changedPlayer);
     }
-    res.json({ ok: true, multiplayer: true, persistence: Boolean(pool) });
-  } catch (error) {
-    console.error('Health check failed:', error.message);
-    res.status(503).json({ ok: false, multiplayer: true, persistence: false });
   }
-});
+  return [...affected];
+}
 
-app.get('/api/profile/:id', async (req, res) => {
-  const id = req.params.id;
-  if (!validPlayerId(id)) return res.status(400).json({ error: 'Invalid player id.' });
-  try {
-    const save = await readProfile(id);
-    if (save) save.seed = WORLD_SEED;
-    return res.json({ save, worldSeed: WORLD_SEED });
-  } catch (error) {
-    console.error('Profile read failed:', error.message);
-    return res.status(503).json({ error: 'Player storage is unavailable.' });
-  }
-});
-
-app.post('/api/profile/:id', async (req, res) => {
-  const id = req.params.id;
-  const save = req.body?.save;
-  if (!validPlayerId(id)) return res.status(400).json({ error: 'Invalid player id.' });
-  if (!save || typeof save !== 'object' || !save.player || !save.player.upgrades) {
-    return res.status(400).json({ error: 'A valid voyage save is required.' });
-  }
-  try {
-    await writeProfile(id, save);
-    return res.json({ ok: true, worldSeed: WORLD_SEED });
-  } catch (error) {
-    console.error('Profile write failed:', error.message);
-    return res.status(503).json({ error: 'Could not save this voyage.' });
-  }
-});
-
-app.use(express.static(path.join(__dirname, 'dist')));
-app.get('*', (req, res) => {
-  if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found.' });
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-});
-
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 256 * 1024 });
-
-wss.on('connection', (socket, request) => {
-  const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-  const id = url.searchParams.get('id');
-  if (!validPlayerId(id) || players.size >= MAX_PLAYERS || players.has(id)) {
-    send(socket, { type: 'error', message: 'Could not join the ocean. Refresh and try again.' });
-    socket.close(1008, 'Invalid or duplicate player session');
-    return;
-  }
-
-  const spawn = findSpawn();
-  const player = {
-    id,
-    name: 'Unknown Captain',
-    socket,
-    state: null,
-    lastUpdate: Date.now(),
-    isAlive: true,
-    broadside: false,
-    lastCombatAt: 0,
+function sanitizeWeather(input) {
+  if (!input || typeof input !== 'object' || !input.weather || !WEATHER_TYPES.has(input.weather.type)) return null;
+  const w = input.weather;
+  return {
+    weather: {
+      type: w.type,
+      windSpeed: clamp(w.windSpeed, 0, 100, 12),
+      windDir: clamp(w.windDir, -Math.PI * 8, Math.PI * 8, 0),
+      waveIntensity: clamp(w.waveIntensity, 0.1, 5, 1),
+      fogDensity: clamp(w.fogDensity, 0, 0.03, 0.001),
+      rainIntensity: clamp(w.rainIntensity, 0, 1, 0),
+      snowIntensity: clamp(w.snowIntensity, 0, 1, 0),
+      hailIntensity: clamp(w.hailIntensity, 0, 1, 0),
+      lightningFlash: clamp(w.lightningFlash, 0, 1, 0),
+      waterDrainMult: clamp(w.waterDrainMult, 0.5, 3, 1),
+      visibilityLabel: cleanName(w.visibilityLabel, 'Normal visibility'),
+      seaConditionLabel: cleanName(w.seaConditionLabel, 'Moderate seas'),
+      warningText: w.warningText == null ? null : String(w.warningText).slice(0, 160),
+      timeUntilChange: clamp(w.timeUntilChange, 0, 3600, 120),
+    },
+    tornadoPos: input.tornadoPos && typeof input.tornadoPos === 'object' ? {
+      x: clamp(input.tornadoPos.x, -5_000_000, 5_000_000),
+      z: clamp(input.tornadoPos.z, -5_000_000, 5_000_000),
+      vx: clamp(input.tornadoPos.vx, -100, 100),
+      vz: clamp(input.tornadoPos.vz, -100, 100),
+      active: Boolean(input.tornadoPos.active),
+    } : null,
+    updatedAt: Date.now(),
   };
-  players.set(id, player);
+}
 
-  send(socket, {
-    type: 'welcome',
-    playerId: id,
-    spawn,
-    players: [...players.values()].filter((other) => other.id !== id).map(publicPlayer).filter(Boolean),
-    worldSeed: WORLD_SEED,
-    weatherType: sharedWeatherType,
-  });
+function promoteWorldLeader() {
+  if (worldLeaderId && players.has(worldLeaderId)) return;
+  worldLeaderId = players.keys().next().value ?? null;
+  broadcast({ type: 'world-leader', leaderId: worldLeaderId, weather: sharedWeather, pirates: sharedWorldPirates });
+}
 
-  socket.on('pong', () => {
-    player.isAlive = true;
-  });
+wss.on('connection', (ws) => {
+  let joinedId = null;
 
-  socket.on('message', (raw) => {
+  ws.on('message', (raw) => {
     let message;
-    try {
-      message = JSON.parse(raw.toString());
-    } catch {
+    try { message = JSON.parse(raw.toString()); }
+    catch { send(ws, { type: 'error', message: 'Invalid message format.' }); return; }
+    if (!message || typeof message.type !== 'string') return;
+
+    if (message.type === 'join') {
+      if (joinedId) return;
+      const id = String(message.id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+      if (!id) { send(ws, { type: 'error', message: 'A player ID is required.' }); ws.close(1008, 'Missing player ID'); return; }
+      const previousConnection = players.get(id);
+      if (players.size >= MAX_PLAYERS && !previousConnection) {
+        send(ws, { type: 'full', message: 'The ocean server is currently full. Try again later.' });
+        ws.close(1013, 'Server full'); return;
+      }
+      if (previousConnection && previousConnection.ws !== ws) {
+        previousConnection.ws.close(4001, 'Player reconnected in another tab');
+        players.delete(id);
+      }
+      const previousState = normalizeState(message.state, previousConnection || {});
+      const player = {
+        id,
+        name: cleanName(message.name, 'Captain'),
+        shipName: cleanName(message.shipName, 'Unnamed Vessel'),
+        ...previousState,
+        ws,
+        lastSeen: Date.now(),
+      };
+      if (!Boolean(message.hasSpawned)) Object.assign(player, chooseNearbySpawn(id));
+      players.set(id, player);
+      joinedId = id;
+      if (!worldLeaderId || !players.has(worldLeaderId)) worldLeaderId = id;
+      send(ws, {
+        type: 'welcome',
+        playerId: id,
+        worldSeed: WORLD_SEED,
+        spawn: !Boolean(message.hasSpawned) ? { x: player.x, z: player.z, heading: player.heading } : null,
+        players: [...players.values()].filter((p) => p.id !== id).map(publicPlayer),
+        onlineCount: players.size,
+        worldLeaderId,
+        weather: sharedWeather,
+        pirates: sharedWorldPirates,
+      });
+      broadcast({ type: 'player-joined', player: publicPlayer(player), onlineCount: players.size }, id);
+      const corrected = resolveShipCollisions(player);
+      for (const affected of corrected) {
+        send(affected.ws, { type: 'state-correction', state: publicPlayer(affected) });
+        broadcast({ type: 'player-update', player: publicPlayer(affected) });
+      }
       return;
     }
 
-    if (!message || typeof message !== 'object') return;
+    if (message.type === 'heartbeat') {
+      if (joinedId) {
+        const activePlayer = players.get(joinedId);
+        if (activePlayer?.ws === ws) activePlayer.lastSeen = Date.now();
+      }
+      send(ws, { type: 'heartbeat-ack', now: Date.now() });
+      return;
+    }
 
-    if (message.type === 'leave') {
-      player.state = null;
-      player.name = 'Unknown Captain';
-      broadcast({ type: 'player_left', playerId: id }, id);
+    if (!joinedId) return;
+    const player = players.get(joinedId);
+    if (!player || player.ws !== ws) return;
+    player.lastSeen = Date.now();
+
+    if (message.type === 'name') {
+      player.name = cleanName(message.name, 'Captain');
+      player.shipName = cleanName(message.shipName, player.shipName);
+      broadcast({ type: 'player-update', player: publicPlayer(player) });
       return;
     }
 
     if (message.type === 'state') {
-      const incoming = message.state;
-      if (!incoming || !Number.isFinite(incoming.x) || !Number.isFinite(incoming.z)) return;
-      if (!Number.isFinite(incoming.heading) || !Number.isFinite(incoming.speed)) return;
-
-      player.name = cleanName(incoming.name);
-      player.state = {
-        x: Math.max(-10_000_000, Math.min(10_000_000, incoming.x)),
-        z: Math.max(-10_000_000, Math.min(10_000_000, incoming.z)),
-        heading: incoming.heading,
-        speed: Math.max(-100, Math.min(100, incoming.speed)),
-        landed: Boolean(incoming.landed),
-        ship: incoming.ship && typeof incoming.ship === 'object' ? incoming.ship : null,
-      };
-      player.lastUpdate = Date.now();
-      if (!sharedWeatherType && typeof incoming.weatherType === 'string') sharedWeatherType = incoming.weatherType;
-      if (sharedWeatherType) send(socket, { type: 'world_weather', weatherType: sharedWeatherType });
-      broadcast({ type: 'player_update', player: publicPlayer(player) }, id);
-      return;
-    }
-
-    if (message.type === 'action') {
-      const action = message.action || {};
-      const targetId = String(action.targetId || '');
-      const target = players.get(targetId);
-      if (!target || !target.state || !player.state || targetId === id) return;
-      const distance = Math.hypot(target.state.x - player.state.x, target.state.z - player.state.z);
-      const now = Date.now();
-      if (action.kind === 'wreck_section_looted') {
-        const wreckId = String(action.wreckId || '').slice(0, 160);
-        const sectionId = String(action.sectionId || '').slice(0, 160);
-        if (!wreckId || !sectionId) return;
-        const key = `${WORLD_SEED}:${wreckId}:${sectionId}`;
-        if (lootedWreckSections.has(key)) {
-          send(socket, { type: 'wreck_section_looted', wreckId, sectionId, alreadyLooted: true });
-          return;
+      Object.assign(player, normalizeState(message.state, player));
+      const affected = resolveShipCollisions(player);
+      if (affected.length === 0) {
+        broadcast({ type: 'player-update', player: publicPlayer(player) }, joinedId);
+      } else {
+        for (const p of affected) {
+          send(p.ws, { type: 'state-correction', state: publicPlayer(p) });
+          broadcast({ type: 'player-update', player: publicPlayer(p) });
         }
-        lootedWreckSections.add(key);
-        broadcast({ type: 'wreck_section_looted', wreckId, sectionId, looterId: id, looterName: player.name }, null);
-        return;
-      }
-      if (action.kind === 'set_shared_weather') {
-        const allowed = new Set(['calm','clear','light_winds','strong_winds','light_rain','heavy_rain','hail','severe_hail','snow','blizzard','thunderstorm','lightning_storm','hurricane','tornado','dense_fog','heatwave']);
-        const weatherType = String(action.weatherType || '');
-        if (!allowed.has(weatherType)) return;
-        sharedWeatherType = weatherType;
-        broadcast({ type: 'world_weather', weatherType, changedBy: player.name });
-        return;
-      }
-      if (action.kind === 'broadside') {
-        if (distance > 320 || player.state.landed || target.state.landed) return;
-        player.broadside = Boolean(action.enabled);
-        send(socket, { type: 'pvp_event', event: 'broadside', targetId, enabled: player.broadside });
-      } else if (action.kind === 'island_shot') {
-        if (distance > 115 || !player.state.landed || !target.state.landed || now - player.lastCombatAt < 1200) return;
-        player.lastCombatAt = now;
-        send(target.socket, { type: 'pvp_event', event: 'island_shot', attackerId: id, attackerName: player.name, damage: 7 + Math.floor(Math.random() * 7) });
-        send(socket, { type: 'pvp_event', event: 'shot_fired', targetId });
-      } else if (action.kind === 'trade_offer') {
-        if (distance > 90 || player.state.landed !== target.state.landed) return;
-        const offer = { fromId: id, fromName: player.name, toId: targetId, gold: Math.max(0, Math.min(100000, Math.floor(Number(action.gold) || 0))), item: String(action.item || '').slice(0, 40) };
-        send(target.socket, { type: 'trade_offer', offer });
-        send(socket, { type: 'trade_result', status: 'sent', message: `Trade offer sent to ${target.name}.` });
-      } else if (action.kind === 'trade_response') {
-        const offer = action.offer;
-        if (!offer || offer.toId !== id || offer.fromId !== targetId || distance > 90) return;
-        if (action.accept) {
-          void (async () => {
-            try {
-              const [fromSave, toSave] = await Promise.all([readProfile(targetId), readProfile(id)]);
-              if (!fromSave?.player || !toSave?.player || Number(fromSave.player.gold || 0) < offer.gold) {
-                send(socket, { type: 'trade_result', status: 'failed', message: 'Trade failed: the other captain no longer has enough saved gold.' });
-                send(target.socket, { type: 'trade_result', status: 'failed', message: 'Trade failed: insufficient gold.' });
-                return;
-              }
-              fromSave.player.gold = Math.max(0, Number(fromSave.player.gold || 0) - offer.gold);
-              toSave.player.gold = Math.max(0, Number(toSave.player.gold || 0) + offer.gold);
-              await Promise.all([writeProfile(targetId, fromSave), writeProfile(id, toSave)]);
-              send(socket, { type: 'trade_result', status: 'accepted', message: `Trade complete: ${offer.gold} gold received from ${target.name}.`, goldDelta: offer.gold });
-              send(target.socket, { type: 'trade_result', status: 'accepted', message: `Trade complete: ${offer.gold} gold sent to ${player.name}.`, goldDelta: -offer.gold });
-            } catch (error) {
-              console.error('Player trade failed:', error.message);
-              send(socket, { type: 'trade_result', status: 'failed', message: 'Trade could not be completed. Try again.' });
-            }
-          })();
-        } else {
-          send(target.socket, { type: 'trade_result', status: 'declined', message: `${player.name} declined your trade offer.` });
-          send(socket, { type: 'trade_result', status: 'declined', message: `You declined the trade with ${target.name}.` });
-        }
-      } else if (action.kind === 'ram') {
-        if (distance > 24 || player.state.landed || target.state.landed || now - player.lastCombatAt < 1800) return;
-        player.lastCombatAt = now;
-        const damage = Math.max(4, Math.min(18, Math.round(Math.abs(player.state.speed) * 1.4)));
-        send(target.socket, { type: 'pvp_event', event: 'rammed', attackerId: id, attackerName: player.name, damage });
-        send(socket, { type: 'pvp_event', event: 'ram_hit', targetId });
       }
       return;
     }
 
-    if (message.type === 'ping') {
-      send(socket, { type: 'pong', at: Date.now() });
+    if (message.type === 'world-weather' && joinedId === worldLeaderId) {
+      const weather = sanitizeWeather(message.state);
+      if (weather) {
+        sharedWeather = weather;
+        broadcast({ type: 'world-weather', state: sharedWeather });
+      }
+      return;
+    }
+
+    if (message.type === 'world-pirates' && joinedId === worldLeaderId) {
+      const list = Array.isArray(message.pirates) ? message.pirates.slice(0, 32) : [];
+      sharedWorldPirates = list.filter((pirate) => pirate && typeof pirate.id === 'string' && pirate.id.length <= 100 && Number.isFinite(pirate.x) && Number.isFinite(pirate.z));
+      broadcast({ type: 'world-pirates', pirates: sharedWorldPirates });
+      return;
+    }
+
+    if (message.type === 'respawn-request') {
+      const spawn = chooseNearbySpawn(joinedId);
+      player.x = spawn.x;
+      player.z = spawn.z;
+      player.heading = spawn.heading;
+      player.speed = 0;
+      player.landed = false;
+      player.lastSeen = Date.now();
+      send(ws, { type: 'respawn', spawn });
+      broadcast({ type: 'player-update', player: publicPlayer(player) }, joinedId);
     }
   });
 
-  socket.on('close', () => {
-    const wasPresent = players.delete(id);
-    if (wasPresent) broadcast({ type: 'player_left', playerId: id });
+  ws.on('close', () => {
+    if (!joinedId) return;
+    const player = players.get(joinedId);
+    if (player?.ws === ws) {
+      players.delete(joinedId);
+      broadcast({ type: 'player-left', id: joinedId, onlineCount: players.size });
+      if (worldLeaderId === joinedId) {
+        worldLeaderId = null;
+        promoteWorldLeader();
+      }
+    }
   });
 
-  socket.on('error', (error) => {
-    console.error(`WebSocket error for ${id}:`, error.message);
-  });
+  ws.on('error', () => {});
 });
 
-const stalePlayerCheck = setInterval(() => {
-  const now = Date.now();
-  const activePlayers = [...players.values()].filter((p) => p.state && !p.state.landed);
-  for (let i = 0; i < activePlayers.length; i++) {
-    for (let j = i + 1; j < activePlayers.length; j++) {
-      const a = activePlayers[i], b = activePlayers[j];
-      const distance = Math.hypot(a.state.x - b.state.x, a.state.z - b.state.z);
-      if (distance < 16 && Math.abs(a.state.speed) > 3 && Math.abs(b.state.speed) > 3 && now - Math.max(a.lastCombatAt, b.lastCombatAt) > 2200) {
-        a.lastCombatAt = b.lastCombatAt = now;
-        const da = Math.max(5, Math.min(16, Math.round(Math.abs(b.state.speed) * 1.1)));
-        const db = Math.max(5, Math.min(16, Math.round(Math.abs(a.state.speed) * 1.1)));
-        send(a.socket, { type: 'pvp_event', event: 'rammed', attackerName: b.name, damage: da });
-        send(b.socket, { type: 'pvp_event', event: 'rammed', attackerName: a.name, damage: db });
+const heartbeatTimer = setInterval(() => {
+  for (const player of players.values()) {
+    if (player.ws.readyState !== WebSocket.OPEN || Date.now() - player.lastSeen > 45_000) {
+      if (player.ws.readyState === WebSocket.OPEN) player.ws.terminate();
+      players.delete(player.id);
+      broadcast({ type: 'player-left', id: player.id, onlineCount: players.size });
+      if (worldLeaderId === player.id) {
+        worldLeaderId = null;
+        promoteWorldLeader();
       }
     }
   }
-  for (const [id, attacker] of players) {
-    if (!attacker.broadside || !attacker.state || now - attacker.lastCombatAt < 1100) continue;
-    const target = [...players.values()].find((p) => p.id !== id && p.state && !p.state.landed && !attacker.state.landed && Math.hypot(p.state.x - attacker.state.x, p.state.z - attacker.state.z) <= 320);
-    if (!target) continue;
-    attacker.lastCombatAt = now;
-    const damage = 3 + Math.floor(Math.random() * 5);
-    send(target.socket, { type: 'pvp_event', event: 'broadside_hit', attackerId: id, attackerName: attacker.name, damage });
-    send(attacker.socket, { type: 'pvp_event', event: 'broadside_hit', attackerId: target.id, attackerName: target.name, damage: 2 + Math.floor(Math.random() * 4) });
-  }
-  for (const [id, player] of players) {
-    if (!player.isAlive) {
-      player.socket.terminate();
-      players.delete(id);
-      broadcast({ type: 'player_left', playerId: id });
-      continue;
-    }
-    if (player.socket.readyState === WebSocket.OPEN) {
-      player.isAlive = false;
-      player.socket.ping();
-    } else if (player.socket.readyState !== WebSocket.CONNECTING) {
-      const wasPresent = players.delete(id);
-      if (wasPresent) broadcast({ type: 'player_left', playerId: id });
-    }
-  }
-}, 30_000);
+}, 15_000);
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Infinite Ocean multiplayer server listening on ${PORT}`);
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`Infinite Ocean Survival multiplayer server listening on ${PORT}`);
 });
 
 function shutdown() {
-  clearInterval(stalePlayerCheck);
-  for (const player of players.values()) player.socket.close(1001, 'Server restarting');
-  server.close(() => {
-    if (pool) pool.end().finally(() => process.exit(0));
-    else process.exit(0);
-  });
-  setTimeout(() => process.exit(1), 8_000).unref();
+  clearInterval(heartbeatTimer);
+  for (const player of players.values()) {
+    send(player.ws, { type: 'server-shutdown' });
+    player.ws.close(1001, 'Server shutting down');
+  }
+  wss.close();
+  httpServer.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 25_000).unref();
 }
-
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

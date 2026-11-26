@@ -1,3 +1,5 @@
+import type { PirateShipData, WeatherState } from '../game/types';
+
 export interface RemotePlayerState {
   id: string;
   name: string;
@@ -25,10 +27,16 @@ export type MultiplayerStatus = 'connecting' | 'online' | 'reconnecting' | 'offl
 
 interface MultiplayerCallbacks {
   onStatus: (status: MultiplayerStatus, message?: string) => void;
-  onWelcome: (data: { worldSeed: number; spawn: { x: number; z: number; heading: number } | null }) => void;
+  onWelcome: (data: { worldSeed: number; spawn: { x: number; z: number; heading: number } | null; isWorldLeader: boolean; weather: { weather: WeatherState; tornadoPos: { x: number; z: number; vx: number; vz: number; active: boolean } | null } | null; pirates: PirateShipData[] }) => void;
+  onWorldAuthority: (isAuthority: boolean) => void;
+  onWorldWeather: (state: { weather: WeatherState; tornadoPos: { x: number; z: number; vx: number; vz: number; active: boolean } | null }) => void;
+  onWorldPirates: (pirates: PirateShipData[]) => void;
+  onStateCorrection: (state: LocalShipState) => void;
   onPlayers: (players: RemotePlayerState[]) => void;
   onRespawn: (spawn: { x: number; z: number; heading: number }) => void;
   getLocalState: () => LocalShipState | null;
+  getLocalWeatherState: () => { weather: WeatherState; tornadoPos: { x: number; z: number; vx: number; vz: number; active: boolean } | null } | null;
+  getLocalPirateStates: () => PirateShipData[];
 }
 
 const PLAYER_ID_KEY = 'oceanbound_mp_player_id_v1';
@@ -74,6 +82,8 @@ export class MultiplayerClient {
   private heartbeatTimer: number | null = null;
   private stateTimer: number | null = null;
   private respawnTimer: number | null = null;
+  private worldSyncTimer: number | null = null;
+  private isWorldLeader = false;
   private shouldReconnect = true;
   private hasSpawned = false;
   private name = loadMultiplayerName();
@@ -168,9 +178,16 @@ export class MultiplayerClient {
         this.hasSpawned = true;
         try { localStorage.setItem(HAS_SPAWNED_KEY, '1'); } catch { /* ignore */ }
       }
+      this.isWorldLeader = String(message.worldLeaderId || '') === this.playerId;
+      this.callbacks.onWorldAuthority(this.isWorldLeader);
+      if (message.weather?.weather) this.callbacks.onWorldWeather(message.weather);
+      if (Array.isArray(message.pirates)) this.callbacks.onWorldPirates(message.pirates as PirateShipData[]);
       this.callbacks.onWelcome({
         worldSeed: Number(message.worldSeed) || 731296,
         spawn: message.spawn ?? null,
+        isWorldLeader: this.isWorldLeader,
+        weather: message.weather?.weather ? message.weather : null,
+        pirates: Array.isArray(message.pirates) ? message.pirates as PirateShipData[] : [],
       });
       this.emitPlayers();
       return;
@@ -188,6 +205,29 @@ export class MultiplayerClient {
     if (message.type === 'player-left') {
       if (message.id) this.remotePlayers.delete(String(message.id));
       this.emitPlayers();
+      return;
+    }
+
+    if (message.type === 'state-correction' && message.state) {
+      this.callbacks.onStateCorrection(message.state as LocalShipState);
+      return;
+    }
+
+    if (message.type === 'world-leader') {
+      this.isWorldLeader = String(message.leaderId || '') === this.playerId;
+      this.callbacks.onWorldAuthority(this.isWorldLeader);
+      if (message.weather?.weather) this.callbacks.onWorldWeather(message.weather);
+      if (Array.isArray(message.pirates)) this.callbacks.onWorldPirates(message.pirates as PirateShipData[]);
+      return;
+    }
+
+    if (message.type === 'world-weather' && message.state?.weather) {
+      this.callbacks.onWorldWeather(message.state);
+      return;
+    }
+
+    if (message.type === 'world-pirates' && Array.isArray(message.pirates)) {
+      this.callbacks.onWorldPirates(message.pirates as PirateShipData[]);
       return;
     }
 
@@ -237,13 +277,21 @@ export class MultiplayerClient {
     this.heartbeatTimer = window.setInterval(() => {
       this.send({ type: 'heartbeat' });
     }, 15_000);
+    this.worldSyncTimer = window.setInterval(() => {
+      if (!this.isWorldLeader) return;
+      const weather = this.callbacks.getLocalWeatherState();
+      if (weather) this.send({ type: 'world-weather', state: weather });
+      this.send({ type: 'world-pirates', pirates: this.callbacks.getLocalPirateStates() });
+    }, 1000);
   }
 
   private stopTimers(): void {
     if (this.stateTimer !== null) window.clearInterval(this.stateTimer);
     if (this.heartbeatTimer !== null) window.clearInterval(this.heartbeatTimer);
+    if (this.worldSyncTimer !== null) window.clearInterval(this.worldSyncTimer);
     this.stateTimer = null;
     this.heartbeatTimer = null;
+    this.worldSyncTimer = null;
   }
 
   private scheduleReconnect(): void {
@@ -285,5 +333,6 @@ export class MultiplayerClient {
     this.socket?.close(1000, 'Client closed');
     this.socket = null;
     this.remotePlayers.clear();
+    this.isWorldLeader = false;
   }
 }
