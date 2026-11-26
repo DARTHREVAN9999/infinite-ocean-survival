@@ -27,6 +27,8 @@ const pool = process.env.DATABASE_URL
 
 const memoryProfiles = new Map();
 const players = new Map();
+const lootedWreckSections = new Set();
+let sharedWeatherType = null;
 
 let databaseReady = Promise.resolve();
 if (pool) {
@@ -194,6 +196,8 @@ wss.on('connection', (socket, request) => {
     state: null,
     lastUpdate: Date.now(),
     isAlive: true,
+    broadside: false,
+    lastCombatAt: 0,
   };
   players.set(id, player);
 
@@ -203,6 +207,7 @@ wss.on('connection', (socket, request) => {
     spawn,
     players: [...players.values()].filter((other) => other.id !== id).map(publicPlayer).filter(Boolean),
     worldSeed: WORLD_SEED,
+    weatherType: sharedWeatherType,
   });
 
   socket.on('pong', () => {
@@ -241,7 +246,87 @@ wss.on('connection', (socket, request) => {
         ship: incoming.ship && typeof incoming.ship === 'object' ? incoming.ship : null,
       };
       player.lastUpdate = Date.now();
+      if (!sharedWeatherType && typeof incoming.weatherType === 'string') sharedWeatherType = incoming.weatherType;
+      if (sharedWeatherType) send(socket, { type: 'world_weather', weatherType: sharedWeatherType });
       broadcast({ type: 'player_update', player: publicPlayer(player) }, id);
+      return;
+    }
+
+    if (message.type === 'action') {
+      const action = message.action || {};
+      const targetId = String(action.targetId || '');
+      const target = players.get(targetId);
+      if (!target || !target.state || !player.state || targetId === id) return;
+      const distance = Math.hypot(target.state.x - player.state.x, target.state.z - player.state.z);
+      const now = Date.now();
+      if (action.kind === 'wreck_section_looted') {
+        const wreckId = String(action.wreckId || '').slice(0, 160);
+        const sectionId = String(action.sectionId || '').slice(0, 160);
+        if (!wreckId || !sectionId) return;
+        const key = `${WORLD_SEED}:${wreckId}:${sectionId}`;
+        if (lootedWreckSections.has(key)) {
+          send(socket, { type: 'wreck_section_looted', wreckId, sectionId, alreadyLooted: true });
+          return;
+        }
+        lootedWreckSections.add(key);
+        broadcast({ type: 'wreck_section_looted', wreckId, sectionId, looterId: id, looterName: player.name }, null);
+        return;
+      }
+      if (action.kind === 'set_shared_weather') {
+        const allowed = new Set(['calm','clear','light_winds','strong_winds','light_rain','heavy_rain','hail','severe_hail','snow','blizzard','thunderstorm','lightning_storm','hurricane','tornado','dense_fog','heatwave']);
+        const weatherType = String(action.weatherType || '');
+        if (!allowed.has(weatherType)) return;
+        sharedWeatherType = weatherType;
+        broadcast({ type: 'world_weather', weatherType, changedBy: player.name });
+        return;
+      }
+      if (action.kind === 'broadside') {
+        if (distance > 320 || player.state.landed || target.state.landed) return;
+        player.broadside = Boolean(action.enabled);
+        send(socket, { type: 'pvp_event', event: 'broadside', targetId, enabled: player.broadside });
+      } else if (action.kind === 'island_shot') {
+        if (distance > 115 || !player.state.landed || !target.state.landed || now - player.lastCombatAt < 1200) return;
+        player.lastCombatAt = now;
+        send(target.socket, { type: 'pvp_event', event: 'island_shot', attackerId: id, attackerName: player.name, damage: 7 + Math.floor(Math.random() * 7) });
+        send(socket, { type: 'pvp_event', event: 'shot_fired', targetId });
+      } else if (action.kind === 'trade_offer') {
+        if (distance > 90 || player.state.landed !== target.state.landed) return;
+        const offer = { fromId: id, fromName: player.name, toId: targetId, gold: Math.max(0, Math.min(100000, Math.floor(Number(action.gold) || 0))), item: String(action.item || '').slice(0, 40) };
+        send(target.socket, { type: 'trade_offer', offer });
+        send(socket, { type: 'trade_result', status: 'sent', message: `Trade offer sent to ${target.name}.` });
+      } else if (action.kind === 'trade_response') {
+        const offer = action.offer;
+        if (!offer || offer.toId !== id || offer.fromId !== targetId || distance > 90) return;
+        if (action.accept) {
+          void (async () => {
+            try {
+              const [fromSave, toSave] = await Promise.all([readProfile(targetId), readProfile(id)]);
+              if (!fromSave?.player || !toSave?.player || Number(fromSave.player.gold || 0) < offer.gold) {
+                send(socket, { type: 'trade_result', status: 'failed', message: 'Trade failed: the other captain no longer has enough saved gold.' });
+                send(target.socket, { type: 'trade_result', status: 'failed', message: 'Trade failed: insufficient gold.' });
+                return;
+              }
+              fromSave.player.gold = Math.max(0, Number(fromSave.player.gold || 0) - offer.gold);
+              toSave.player.gold = Math.max(0, Number(toSave.player.gold || 0) + offer.gold);
+              await Promise.all([writeProfile(targetId, fromSave), writeProfile(id, toSave)]);
+              send(socket, { type: 'trade_result', status: 'accepted', message: `Trade complete: ${offer.gold} gold received from ${target.name}.`, goldDelta: offer.gold });
+              send(target.socket, { type: 'trade_result', status: 'accepted', message: `Trade complete: ${offer.gold} gold sent to ${player.name}.`, goldDelta: -offer.gold });
+            } catch (error) {
+              console.error('Player trade failed:', error.message);
+              send(socket, { type: 'trade_result', status: 'failed', message: 'Trade could not be completed. Try again.' });
+            }
+          })();
+        } else {
+          send(target.socket, { type: 'trade_result', status: 'declined', message: `${player.name} declined your trade offer.` });
+          send(socket, { type: 'trade_result', status: 'declined', message: `You declined the trade with ${target.name}.` });
+        }
+      } else if (action.kind === 'ram') {
+        if (distance > 24 || player.state.landed || target.state.landed || now - player.lastCombatAt < 1800) return;
+        player.lastCombatAt = now;
+        const damage = Math.max(4, Math.min(18, Math.round(Math.abs(player.state.speed) * 1.4)));
+        send(target.socket, { type: 'pvp_event', event: 'rammed', attackerId: id, attackerName: player.name, damage });
+        send(socket, { type: 'pvp_event', event: 'ram_hit', targetId });
+      }
       return;
     }
 
@@ -261,6 +346,30 @@ wss.on('connection', (socket, request) => {
 });
 
 const stalePlayerCheck = setInterval(() => {
+  const now = Date.now();
+  const activePlayers = [...players.values()].filter((p) => p.state && !p.state.landed);
+  for (let i = 0; i < activePlayers.length; i++) {
+    for (let j = i + 1; j < activePlayers.length; j++) {
+      const a = activePlayers[i], b = activePlayers[j];
+      const distance = Math.hypot(a.state.x - b.state.x, a.state.z - b.state.z);
+      if (distance < 16 && Math.abs(a.state.speed) > 3 && Math.abs(b.state.speed) > 3 && now - Math.max(a.lastCombatAt, b.lastCombatAt) > 2200) {
+        a.lastCombatAt = b.lastCombatAt = now;
+        const da = Math.max(5, Math.min(16, Math.round(Math.abs(b.state.speed) * 1.1)));
+        const db = Math.max(5, Math.min(16, Math.round(Math.abs(a.state.speed) * 1.1)));
+        send(a.socket, { type: 'pvp_event', event: 'rammed', attackerName: b.name, damage: da });
+        send(b.socket, { type: 'pvp_event', event: 'rammed', attackerName: a.name, damage: db });
+      }
+    }
+  }
+  for (const [id, attacker] of players) {
+    if (!attacker.broadside || !attacker.state || now - attacker.lastCombatAt < 1100) continue;
+    const target = [...players.values()].find((p) => p.id !== id && p.state && !p.state.landed && !attacker.state.landed && Math.hypot(p.state.x - attacker.state.x, p.state.z - attacker.state.z) <= 320);
+    if (!target) continue;
+    attacker.lastCombatAt = now;
+    const damage = 3 + Math.floor(Math.random() * 5);
+    send(target.socket, { type: 'pvp_event', event: 'broadside_hit', attackerId: id, attackerName: attacker.name, damage });
+    send(attacker.socket, { type: 'pvp_event', event: 'broadside_hit', attackerId: target.id, attackerName: target.name, damage: 2 + Math.floor(Math.random() * 4) });
+  }
   for (const [id, player] of players) {
     if (!player.isAlive) {
       player.socket.terminate();

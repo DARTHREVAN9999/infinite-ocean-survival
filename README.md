@@ -49,3 +49,18 @@ The free web-service plan sleeps after 15 minutes without inbound traffic, and i
 ## GitHub updates
 
 Connect the repository's `main` branch to the Render Web Service. Once auto-deploy is enabled, each push to `main` triggers a new build and deploy.
+
+## Player interactions (multiplayer)
+
+- Nearby captains appear in the right-hand player panel.
+- Offer a 100-gold player-to-player trade when within 90 metres. The recipient must accept; the server updates both saved profiles in PostgreSQL.
+- Open broadsides against a nearby ship (within 320 metres). Active broadsides exchange recurring hull damage while both ships remain at sea and in range. Use Cease fire to stop.
+- Ships travelling at speed can automatically collide and damage one another at close range. The Ram button also attempts a close-range ram.
+- When both captains are ashore and close enough, use Shoot to damage the other player's ship condition as a simplified island skirmish interaction.
+
+Player-to-player combat is handled by the multiplayer server. Ensure DATABASE_URL is configured for persistent profile saves and gold trades.
+
+## Shared-world additions
+- Wreck section loot is broadcast to all connected clients, so a section searched by one player is marked searched for the others in that running server session.
+- The server holds a shared weather type; the first connected player's weather seeds it, and admin weather changes are broadcast to everyone.
+- Important limitation: wreck claims and shared weather currently live in server memory, so they reset if the server restarts. NPC ship AI/positions and their combat state are not yet authoritative server entities; only player ships are synchronized. The existing game simulates NPC traffic locally, so this build does not yet guarantee every player sees identical NPC ships or NPC movements.
