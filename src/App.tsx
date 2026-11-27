@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { MultiplayerClient, loadMultiplayerName, saveMultiplayerName, type MultiplayerStatus } from './network/MultiplayerClient';
+import { MultiplayerClient, type MultiplayerStatus } from './network/MultiplayerClient';
+import { PlayerInteractionModal, IncomingTradeModal } from './components/PlayerInteractionModal';
+import type { IncomingTradeOffer } from './engine/oceanScene';
 import {
   HudSnapshot,
   MerchantShipData,
@@ -35,7 +37,6 @@ import { MapModal } from './components/MapModal';
 import { PauseSettingsModal } from './components/PauseSettingsModal';
 import { GameOverModal } from './components/GameOverModal';
 import { WeatherModal } from './components/WeatherModal';
-import { AdminModal } from './components/AdminModal';
 import { FloatingDamageLayer } from './components/FloatingDamageLayer';
 import { FirstPersonHud } from './components/FirstPersonHud';
 import { FishingMinigameModal } from './components/FishingMinigameModal';
@@ -48,7 +49,6 @@ type ActiveModal =
   | { type: 'journal' }
   | { type: 'map' }
   | { type: 'weather' }
-  | { type: 'admin' }
   | { type: 'fishing' }
   | { type: 'treasure' }
   | { type: 'settlement'; id: string }
@@ -57,6 +57,7 @@ type ActiveModal =
   | { type: 'merchant_trade'; id: string }
   | { type: 'pirate_parley'; id: string }
   | { type: 'monster'; id: string }
+  | { type: 'player_interact'; id: string }
   | { type: 'pirate_hail'; pirate: PirateShipData }
   | { type: 'crown_hail'; crown: MerchantShipData }
   | { type: 'victory_loot'; pirate: PirateShipData }
@@ -75,9 +76,7 @@ export function App() {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<OceanEngine | null>(null);
   const multiplayerRef = useRef<MultiplayerClient | null>(null);
-  const [playerName, setPlayerName] = useState<string>(() => loadMultiplayerName());
-  const playerNameRef = useRef(playerName);
-  playerNameRef.current = playerName;
+  const [incomingTrade, setIncomingTrade] = useState<IncomingTradeOffer | null>(null);
   const [multiplayerStatus, setMultiplayerStatus] = useState<MultiplayerStatus>('connecting');
   const [onlinePlayers, setOnlinePlayers] = useState(1);
 
@@ -123,10 +122,10 @@ export function App() {
       openModal({ type: 'vessel_menu', id: prompt.id });
     } else if (prompt.kind === 'pirate_hail') {
       openModal({ type: 'pirate_parley', id: prompt.id });
+    } else if (prompt.kind === 'player') {
+      openModal({ type: 'player_interact', id: prompt.id });
     } else if (prompt.kind === 'monster') {
       openModal({ type: 'monster', id: prompt.id });
-    } else if (prompt.kind === 'monster_carcass' || prompt.kind === 'sea_wildlife') {
-      openModal({ type: 'fishing' });
     } else if (prompt.kind === 'island') {
       engine.landOnIsland(prompt.id);
     } else if (prompt.kind === 'settlement') {
@@ -179,39 +178,6 @@ export function App() {
     }
   };
 
-  // Hidden Admin Console hotkey: P opens/toggles password & console (only while playing & not typing)
-  useEffect(() => {
-    const onGlobalKeyDown = (e: KeyboardEvent) => {
-      if (phaseRef.current !== 'playing') return;
-      const active = document.activeElement as HTMLElement | null;
-      if (
-        active &&
-        (active.tagName === 'INPUT' ||
-          active.tagName === 'TEXTAREA' ||
-          active.tagName === 'SELECT' ||
-          active.isContentEditable)
-      ) {
-        return;
-      }
-      if (e.code === 'KeyP' || e.key.toLowerCase() === 'p') {
-        e.preventDefault();
-        if (modalRef.current?.type === 'admin') {
-          openModal(null);
-        } else if (
-          !modalRef.current ||
-          (modalRef.current.type !== 'pirate_hail' &&
-            modalRef.current.type !== 'crown_hail' &&
-            modalRef.current.type !== 'victory_loot' &&
-            modalRef.current.type !== 'merchant_victory')
-        ) {
-          openModal({ type: 'admin' });
-        }
-      }
-    };
-    window.addEventListener('keydown', onGlobalKeyDown);
-    return () => window.removeEventListener('keydown', onGlobalKeyDown);
-  }, [openModal]);
-
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
@@ -219,6 +185,7 @@ export function App() {
     const initialData = loadVoyageFromStorage() ?? createNewVoyage();
     const engine = new OceanEngine(mount, initialData, {
       onHudUpdate: (snap) => setHud(snap),
+      onIncomingTradeOffer: (offer) => setIncomingTrade(offer),
       onPirateHail: (pirate) => {
         setHailError(null);
         setModal({ type: 'pirate_hail', pirate: { ...pirate } });
@@ -271,31 +238,37 @@ export function App() {
         setMultiplayerStatus(status);
         if (status !== 'online') setOnlinePlayers(0);
       },
-      onWelcome: ({ worldSeed, spawn, isWorldLeader, weather, pirates }) => {
+      onWelcome: ({ playerId, worldSeed, spawn, isWorldLeader, weather, patches, npcs }) => {
+        engine.setMyPlayerId(playerId);
         engine.setMultiplayerWorldSeed(worldSeed);
         engine.setMultiplayerWorldAuthority(isWorldLeader);
         if (weather) engine.applyMultiplayerWeatherState(weather);
-        if (pirates?.length) engine.syncSharedPirateStates(pirates);
+        engine.applyInitialWorldPatches(patches);
+        engine.applyNpcStates(npcs);
         if (spawn) engine.applyMultiplayerSpawn(spawn);
       },
       onWorldAuthority: (isAuthority) => engine.setMultiplayerWorldAuthority(isAuthority),
       onWorldWeather: (state) => engine.applyMultiplayerWeatherState(state),
-      onWorldPirates: (pirates) => engine.syncSharedPirateStates(pirates),
-      onStateCorrection: (state) => engine.applyMultiplayerCorrection(state),
+      onPatches: (patches) => engine.applyWorldPatches(patches),
+      onNpcStates: (npcs) => engine.applyNpcStates(npcs),
       onPlayers: (players) => {
         engine.syncRemotePlayers(players);
         setOnlinePlayers(players.length + 1);
       },
       onRespawn: (spawn) => engine.respawnAfterDeath(spawn),
-      getLocalState: () => ({
-        name: playerNameRef.current,
-        ...engine.getMultiplayerShipState(),
-      }),
+      onRelay: (type, from, fromName, payload) => engine.handleRelay(type, from, fromName, payload),
+      onRelayFailed: (reason) => engine.pushNotification(reason),
+      getLocalState: () => engine.getMultiplayerShipState(),
       getLocalWeatherState: () => engine.getMultiplayerWeatherState(),
-      getLocalPirateStates: () => engine.getMultiplayerPirateStates(),
+      getOwnedNpcStates: () => engine.getOwnedNpcStates(),
     });
     multiplayerRef.current = client;
-    client.connect(playerNameRef.current, initialData.player.shipName);
+    engine.setMyPlayerId(client.playerId);
+    engine.setNetBridge({
+      sendPatch: (kind, id, data) => client.sendPatch(kind, id, data),
+      sendRelay: (type, to, payload) => client.sendRelay(type, to, payload),
+    });
+    client.connect(initialData.player.shipName);
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('autostart') === '1') {
@@ -312,9 +285,8 @@ export function App() {
 
 
   useEffect(() => {
-    saveMultiplayerName(playerName);
-    multiplayerRef.current?.updateProfile(playerName, saveState.player.shipName);
-  }, [playerName, saveState.player.shipName]);
+    multiplayerRef.current?.updateProfile(saveState.player.shipName);
+  }, [saveState.player.shipName]);
 
   const handleStartNew = (shipName?: string) => {
     engineRef.current?.startNewVoyage(shipName);
@@ -368,10 +340,6 @@ export function App() {
   const activeSettlement =
     modal?.type === 'settlement' ? engineRef.current?.getSettlementById(modal.id) ?? null : null;
 
-  const adminTargets =
-    modal?.type === 'admin' && hud?.adminUnlocked
-      ? engineRef.current?.getAdminTeleportTargets() ?? []
-      : [];
 
   void modalTick;
 
@@ -404,8 +372,6 @@ export function App() {
           savedVoyage={savedOnDisk}
           onStartNew={handleStartNew}
           onContinue={handleContinue}
-          playerName={playerName}
-          onPlayerNameChange={setPlayerName}
         />
       )}
 
@@ -422,7 +388,6 @@ export function App() {
             onOpenFishing={() => openModal({ type: 'fishing' })}
             onOpenTreasureMaps={() => openModal({ type: 'treasure' })}
             onOpenWeather={() => openModal({ type: 'weather' })}
-            onOpenAdmin={() => openModal({ type: 'admin' })}
             onOpenPause={() => engineRef.current?.setPhase('paused')}
             onToggleMute={() => {
               const next = engineRef.current?.toggleMute() ?? false;
@@ -458,37 +423,6 @@ export function App() {
 
       {phase === 'playing' && modal?.type === 'weather' && hud && (
         <WeatherModal hud={hud} onClose={() => openModal(null)} />
-      )}
-
-      {phase === 'playing' && modal?.type === 'admin' && hud && (
-        <AdminModal
-          hud={hud}
-          targets={adminTargets}
-          onClose={() => openModal(null)}
-          onUnlock={(pw) => engineRef.current?.unlockAdminMode(pw) ?? false}
-          onToggleAdmin={(en) => engineRef.current?.toggleAdminMode(en)}
-          onTeleportNear={(id) =>
-            engineRef.current?.adminTeleportNear(id) ?? { ok: false, message: 'Unavailable.' }
-          }
-          onRestoreMaxResources={() =>
-            engineRef.current?.adminRestoreMaxResources() ?? { ok: false, message: 'Unavailable.' }
-          }
-          onSpawnMaxFleet={() =>
-            engineRef.current?.adminSpawnMaxFleet() ?? { ok: false, message: 'Unavailable.' }
-          }
-          onSpawnColossalCompanion={() =>
-            engineRef.current?.adminSpawnColossalCompanion() ?? { ok: false, message: 'Unavailable.' }
-          }
-          onSpawnGhostShip={(sz) =>
-            engineRef.current?.adminSpawnGhostShip(sz) ?? { ok: false, message: 'Unavailable.' }
-          }
-          onProjectBounty={() =>
-            engineRef.current?.adminProjectBounty() ?? { ok: false, message: 'Unavailable.' }
-          }
-          onSetWeather={(wt) =>
-            engineRef.current?.adminSetWeather(wt) ?? { ok: false, message: 'Unavailable.' }
-          }
-        />
       )}
 
       {phase === 'playing' && modal?.type === 'ship' && (
@@ -549,6 +483,32 @@ export function App() {
         />
       )}
 
+      {phase === 'playing' && modal?.type === 'player_interact' && (
+        <PlayerInteractionModal
+          target={(() => {
+            const near = engineRef.current?.findNearbyPlayer();
+            return near && near.id === modal.id ? near : null;
+          })()}
+          gold={saveState.player.gold}
+          inventory={saveState.player.inventory}
+          onClose={() => openModal(null)}
+          onProposeTrade={(offer) =>
+            engineRef.current?.proposeTrade(modal.id, offer) ?? { ok: false, message: 'Unavailable.' }
+          }
+          onAttack={() => engineRef.current?.attackPlayer(modal.id) ?? { ok: false, message: 'Unavailable.' }}
+        />
+      )}
+
+      {phase === 'playing' && incomingTrade && (
+        <IncomingTradeModal
+          incoming={incomingTrade}
+          onRespond={(accept) =>
+            engineRef.current?.respondToTrade(incomingTrade.offerId, accept) ?? { ok: false, message: 'Unavailable.' }
+          }
+          onClose={() => setIncomingTrade(null)}
+        />
+      )}
+
       {phase === 'playing' && modal?.type === 'fishing' && hud && (
         <FishingMinigameModal
           biome={hud.biome ?? 'temperate'}
@@ -556,6 +516,9 @@ export function App() {
           fishingGear={hud.fishingGear ?? 'none'}
           nearbyTarget={hud.nearbyFishTarget}
           onClose={() => openModal(null)}
+          onPayCast={(target) =>
+            engineRef.current?.payFishingCastFee(target) ?? { ok: false, cost: 0, message: 'Unavailable.' }
+          }
           onCatchSuccess={(spec) =>
             engineRef.current?.completeManualFishingCatch(spec) ?? {
               ok: false,
@@ -820,7 +783,7 @@ export function App() {
       )}
 
       {phase === 'playing' && modal?.type === 'map' && (
-        <MapModal save={saveState} onClose={() => openModal(null)} />
+        <MapModal save={saveState} otherPlayers={engineRef.current?.getRemotePlayerList() ?? []} onClose={() => openModal(null)} />
       )}
 
       {phase === 'paused' && (

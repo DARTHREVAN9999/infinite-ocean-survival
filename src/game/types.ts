@@ -415,6 +415,8 @@ export interface IslandPirateGuardData {
   hitFlashTimer: number;
   dead: boolean;
   looted: boolean;
+  /** True for members of an indigenous tribe that controls the island instead of pirates. */
+  tribal?: boolean;
   animPhase: number;
   lootGold: number;
   lootGunpowder: number;
@@ -503,6 +505,9 @@ export interface IslandData {
   beachedWrecks: IslandBeachedWreckData[];
   settlement: IslandSettlementData | null;
   pirateGuards?: IslandPirateGuardData[];
+  /** Who holds the island's treasure: pirates (default) or a local indigenous tribe. */
+  controller?: 'pirates' | 'tribe';
+  tribeName?: string;
 }
 
 export type WildlifeSpecies =
@@ -632,7 +637,7 @@ export interface FirstPersonHudState {
   gunpowder: number;
   leadShot: number;
   promptText: string | null;
-  promptActionKind: 'board_ship' | 'discovery' | 'dig_treasure' | 'beached_wreck' | 'settlement' | 'cave' | 'harvest_animal' | 'loot_pirate' | null;
+  promptActionKind: 'board_ship' | 'discovery' | 'dig_treasure' | 'beached_wreck' | 'settlement' | 'cave' | 'harvest_animal' | 'loot_pirate' | 'parley_guard' | null;
   treasureHint: string | null;
   statusBanner: string | null;
 }
@@ -765,6 +770,8 @@ export interface PirateDemand {
 
 export interface PirateShipData {
   id: string;
+  /** Set when this ship is another human player's vessel (PvP stand-in); never AI-driven. */
+  playerId?: string;
   name: string;
   captainName: string;
   factionId: PirateFactionId;
@@ -1149,6 +1156,12 @@ export interface SaveData {
   treasureMaps?: TreasureMapItem[];
   discoveredIslandIds?: string[];
   collectedDiscoveryIds?: string[];
+  /** Per-island standing with a controlling tribe. Missing = neutral/wary. */
+  tribeStanding?: Record<string, 'allied' | 'hostile'>;
+  /** Islands whose guards were provoked (attacked) by this player. */
+  islandProvoked?: string[];
+  /** Islands where this player already took a friendly share of the treasure. */
+  treasureSharesTaken?: string[];
   completedErrandIds?: string[];
   journal: JournalEntry[];
   exploredCells: string[];
@@ -1228,22 +1241,6 @@ export interface FleetDistressAlert {
   inDanger: boolean;
 }
 
-export interface AdminTeleportTarget {
-  id: string;
-  kind:
-    | 'crown_armada'
-    | 'pirate_armada'
-    | 'pirate_boss'
-    | 'major_battle'
-    | 'ghost_ship'
-    | 'island_shore'
-    | 'settlement'
-    | 'icefield';
-  label: string;
-  x: number;
-  z: number;
-  distance: number;
-}
 
 export interface HudSnapshot {
   phase: 'title' | 'playing' | 'paused' | 'gameover';
@@ -1299,7 +1296,8 @@ export interface HudSnapshot {
       | 'sea_wildlife'
       | 'ghost_wreck'
       | 'island'
-      | 'settlement';
+      | 'settlement'
+      | 'player';
     id: string;
     label: string;
     distance: number;
@@ -1312,6 +1310,8 @@ export interface HudSnapshot {
     food: number;
     salt: number;
     distance: number;
+    sizeTier: number;
+    castCost: number;
   } | null;
   combat: CombatState;
   activePirate: PirateShipData | null;
@@ -1333,8 +1333,6 @@ export interface HudSnapshot {
   nearbyGhostWarning: boolean;
   nearbyMajorBattle: string | null;
   activeTornadoWarning: boolean;
-  adminUnlocked: boolean;
-  adminEnabled: boolean;
   notification: string | null;
   damageBanner: DamageNotification | null;
   damageNotifications?: DamageNotification[];

@@ -1,0 +1,26 @@
+# Render Blueprint: one Node web service serves the game AND the /multiplayer WebSocket.
+services:
+  - type: web
+    name: infinite-ocean-survival
+    runtime: node
+    region: singapore
+    plan: starter            # free works for testing but sleeps after ~15 min idle (drops everyone)
+    numInstances: 1          # IMPORTANT: the shared world lives in this one process's memory
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22
+      - key: MAX_PLAYERS
+        value: 32
+      - key: DATA_DIR
+        value: /var/data     # shared-world save location (see disk below)
+    # Optional but recommended on a paid plan: keeps bot-ship gold/stock, looted wrecks, defeated
+    # pirates etc. across restarts and redeploys.
+    disk:
+      name: ocean-world
+      mountPath: /var/data
+      sizeGB: 1

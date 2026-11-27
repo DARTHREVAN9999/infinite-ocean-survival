@@ -1097,14 +1097,18 @@ export interface BuiltIslandPirateGuard {
 export function buildIslandPirateGuardMesh(guard: IslandPirateGuardData): BuiltIslandPirateGuard {
   const root = new THREE.Group();
   const isPistol = guard.role === 'pistol';
+  const isTribal = Boolean(guard.tribal);
 
   const torsoMat = new THREE.MeshStandardMaterial({
-    color: isPistol ? 0x2a3b4c : 0x7c2824,
+    color: isTribal ? 0x8a5a38 : isPistol ? 0x2a3b4c : 0x7c2824,
     roughness: 0.78,
   });
-  const trouserMat = new THREE.MeshStandardMaterial({ color: 0x2b2723, roughness: 0.88 });
-  const skinMat = new THREE.MeshStandardMaterial({ color: 0xd5a77f, roughness: 0.72 });
-  const sashMat = new THREE.MeshStandardMaterial({ color: isPistol ? 0xc99d4e : 0xa82e29, roughness: 0.7 });
+  const trouserMat = new THREE.MeshStandardMaterial({ color: isTribal ? 0x6b4a2e : 0x2b2723, roughness: 0.88 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: isTribal ? 0x9a6a46 : 0xd5a77f, roughness: 0.72 });
+  const sashMat = new THREE.MeshStandardMaterial({
+    color: isTribal ? (isPistol ? 0x2f8f6a : 0x2b6fa8) : isPistol ? 0xc99d4e : 0xa82e29,
+    roughness: 0.7,
+  });
   const hatMat = new THREE.MeshStandardMaterial({ color: 0x1e1d22, roughness: 0.85 });
   const ironMat = new THREE.MeshStandardMaterial({ color: 0x424852, roughness: 0.35, metalness: 0.82 });
   const brassMat = new THREE.MeshStandardMaterial({ color: 0xd6a648, roughness: 0.3, metalness: 0.84 });
@@ -1138,7 +1142,22 @@ export function buildIslandPirateGuardMesh(guard: IslandPirateGuardData): BuiltI
   head.position.y = 1.65;
   root.add(head);
 
-  if (isPistol) {
+  if (isTribal) {
+    // Feathered headdress
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.215, 0.215, 0.07, 10), sashMat);
+    band.position.y = 1.75;
+    root.add(band);
+    const featherColors = [0xd8452f, 0xefc570, 0x2f8f6a];
+    for (let i = 0; i < 3; i++) {
+      const feather = new THREE.Mesh(
+        new THREE.ConeGeometry(0.045, 0.42, 5),
+        new THREE.MeshStandardMaterial({ color: featherColors[i], roughness: 0.6 })
+      );
+      feather.position.set((i - 1) * 0.11, 2.0, -0.04);
+      feather.rotation.z = (i - 1) * -0.28;
+      root.add(feather);
+    }
+  } else if (isPistol) {
     const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.4, 0.08, 3), hatMat);
     brim.position.y = 1.82;
     root.add(brim);
@@ -1164,7 +1183,25 @@ export function buildIslandPirateGuardMesh(guard: IslandPirateGuardData): BuiltI
   rArmMesh.position.y = -0.24;
   weaponArm.add(rArmMesh);
 
-  if (isPistol) {
+  if (isTribal && isPistol) {
+    // Hunting bow
+    const bow = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.017, 6, 14, Math.PI), trouserMat);
+    bow.position.set(0, -0.45, 0.22);
+    bow.rotation.set(0, Math.PI / 2, Math.PI / 2);
+    weaponArm.add(bow);
+    weaponArm.rotation.x = -1.2;
+  } else if (isTribal) {
+    // Stone-tipped spear
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.5, 6), trouserMat);
+    shaft.position.set(0, -0.3, 0.3);
+    shaft.rotation.x = Math.PI * 0.42;
+    weaponArm.add(shaft);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.2, 6), ironMat);
+    tip.position.set(0, -0.12, 1.0);
+    tip.rotation.x = Math.PI * 0.42;
+    weaponArm.add(tip);
+    weaponArm.rotation.x = -0.6;
+  } else if (isPistol) {
     const stock = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.09, 0.34), trouserMat);
     stock.position.set(0, -0.46, 0.16);
     weaponArm.add(stock);

@@ -29,7 +29,6 @@ interface MainHudProps {
   onOpenFishing: () => void;
   onOpenTreasureMaps: () => void;
   onOpenWeather: () => void;
-  onOpenAdmin: () => void;
   onOpenPause: () => void;
   onToggleMute: () => void;
   onToggleStop: () => void;
@@ -63,7 +62,6 @@ export const MainHud: React.FC<MainHudProps> = ({
   onOpenFishing,
   onOpenTreasureMaps,
   onOpenWeather,
-  onOpenAdmin,
   onOpenPause,
   onToggleMute,
   onToggleStop,
@@ -490,19 +488,6 @@ export const MainHud: React.FC<MainHudProps> = ({
         {/* Top-Right: Day, Phase, Clickable Weather Forecast & Menu Action Buttons */}
         <div className="flex flex-col items-end gap-2 pointer-events-auto shrink-0">
           <div className="flex items-center gap-2">
-            {hud.adminEnabled && (
-              <button
-                type="button"
-                tabIndex={-1}
-                onClick={(e) => {
-                  e.currentTarget.blur();
-                  onOpenAdmin();
-                }}
-                className="px-2.5 py-1.5 rounded bg-[#4a1a1a] hover:bg-[#612222] border border-[#e05a4d]/70 text-[#ffd6d2] text-xs font-bold cursor-pointer"
-              >
-                ADMIN [P]
-              </button>
-            )}
             <button
               type="button"
               tabIndex={-1}
@@ -655,6 +640,17 @@ export const MainHud: React.FC<MainHudProps> = ({
             className="pointer-events-auto px-6 py-3 bg-[#c99d4e] hover:bg-[#e0b261] text-[#14100b] font-bold text-base rounded-md shadow-xl cursor-pointer transition-colors whitespace-nowrap"
           >
             Press [E] · {hud.nearbyPrompt.label} ({hud.nearbyPrompt.distance}m)
+          </button>
+        )}
+
+        {!isFps && hud.nearbyFishTarget && !hud.combat.active && (
+          <button
+            type="button"
+            data-testid="hud-fish-prompt"
+            onClick={onOpenFishing}
+            className="pointer-events-auto px-6 py-3 bg-[#2f6f8f] hover:bg-[#3a86ab] text-white font-bold text-base rounded-md shadow-xl cursor-pointer transition-colors whitespace-nowrap"
+          >
+            Press [F] · Fish {hud.nearbyFishTarget.speciesLabel} ({hud.nearbyFishTarget.distance}m · {hud.nearbyFishTarget.castCost}g per cast)
           </button>
         )}
 

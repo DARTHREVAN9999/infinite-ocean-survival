@@ -16,7 +16,7 @@ import {
   SettlementFactionId,
 } from './types';
 import { getOceanBiome } from './biomes';
-import { createIslandPirateGuard } from './fpsCombat';
+import { createIslandPirateGuard, TRIBE_NAMES } from './fpsCombat';
 
 const ISLAND_PREFIXES = [
   'Port',
@@ -690,6 +690,17 @@ export function buildProceduralIsland(
     const clx = Math.cos(chestAngle) * chestDist;
     const clz = Math.sin(chestAngle) * chestDist;
     const chestDisc = createIslandDiscovery(chestId, 'pirate_chest', island, clx, clz, false, rand);
+    // Sometimes a local indigenous tribe holds the island instead of pirates. Uses a seed hash (not rand())
+    // so it never shifts the rest of the deterministic world generation. Same result for every player.
+    const tribeRoll = Math.abs(Math.sin(island.seed * 12.9898 + 78.233) * 43758.5453) % 1;
+    const tribal = !opts.forceStarter && tribeRoll < 0.42;
+    if (tribal) {
+      island.controller = 'tribe';
+      island.tribeName = TRIBE_NAMES[Math.floor(((Math.abs(Math.sin(island.seed * 3.1337) * 9973)) % 1) * TRIBE_NAMES.length)];
+      chestDisc.name = `${island.tribeName} Sacred Cache`;
+    } else {
+      island.controller = 'pirates';
+    }
     if (opts.collectedDiscoveryIds?.has(chestId)) {
       chestDisc.collected = true;
     }
@@ -705,7 +716,7 @@ export function buildProceduralIsland(
         const gz = chestDisc.worldZ + Math.sin(gAng) * 4.5;
         const gy = Math.max(0.4, sampleIslandTerrainHeight(island, gx, gz));
         const role: IslandPirateGuardRole = g % 2 === 0 ? 'cutlass' : 'pistol';
-        guards.push(createIslandPirateGuard(gid, id, chestId, role, gx, gy, gz, rand));
+        guards.push(createIslandPirateGuard(gid, id, chestId, role, gx, gy, gz, rand, tribal));
         guardIds.push(gid);
       }
       chestDisc.guardedByPirateIds = guardIds;

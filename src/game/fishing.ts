@@ -277,3 +277,41 @@ export function getManualFishingGaugeConfig(spec: FishingCatchSpec, gearId: Fish
     sweetCenter: 0.5,
   };
 }
+
+
+/** Size tier of a fishable target: 1 = small shoal ... 7 = legendary sea monster. Bigger = smaller hit bar. */
+export const WILDLIFE_FISH_TIER: Record<string, number> = {
+  fish_school: 1,
+  parrotfish: 1,
+  arctic_cod_shoal: 1,
+  seal: 2,
+  sea_turtle: 2,
+  swordfish: 3,
+  dolphin: 3,
+  manta_ray: 3,
+  ocean_shark: 4,
+  whale_pod: 5,
+};
+
+export const MONSTER_FISH_TIER: Record<string, number> = {
+  small: 4,
+  medium: 5,
+  large: 6,
+  legendary: 7,
+};
+
+/** Gold charged every time the rod is cast. Bigger catches cost more to attempt. */
+export function getFishingCastCost(tier: number | null): number {
+  if (tier == null) return 3;
+  return 4 + Math.round(tier) * 2;
+}
+
+/** Hit-bar config for a creature of the given size tier: bigger catch => narrower bar and faster needle. */
+export function getTargetGaugeConfig(tier: number) {
+  const t = Math.max(1, Math.min(7, tier));
+  return {
+    sweetWidth: Math.max(0.07, 0.36 - t * 0.042),
+    needleSpeed: 0.78 + t * 0.12,
+    sweetCenter: 0.5,
+  };
+}

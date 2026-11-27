@@ -4,6 +4,8 @@ import { FishingCatchSpec, FishingGearId, HudSnapshot, OceanBiomeId } from '../g
 import {
   FISHING_GEAR_SPECS,
   getManualFishingGaugeConfig,
+  getTargetGaugeConfig,
+  getFishingCastCost,
   pickFishingCatchForBiome,
 } from '../game/fishing';
 
@@ -13,6 +15,7 @@ interface FishingMinigameModalProps {
   fishingGear: FishingGearId;
   nearbyTarget?: HudSnapshot['nearbyFishTarget'];
   onClose: () => void;
+  onPayCast: (target: { kind: 'sea_wildlife' | 'monster_carcass'; id: string } | null) => { ok: boolean; cost: number; message: string };
   onCatchSuccess: (spec: FishingCatchSpec) => { ok: boolean; message: string };
   onHarvestNearbyTarget?: (
     kind: 'monster_carcass' | 'sea_wildlife',
@@ -28,6 +31,7 @@ export const FishingMinigameModal: React.FC<FishingMinigameModalProps> = ({
   fishingGear,
   nearbyTarget,
   onClose,
+  onPayCast,
   onCatchSuccess,
   onHarvestNearbyTarget,
 }) => {
@@ -47,17 +51,20 @@ export const FishingMinigameModal: React.FC<FishingMinigameModalProps> = ({
   const isDeepBarren = biome === 'deep' && !activeSpecial;
 
   const gaugeCfg = lockedNearbyTarget
-    ? {
-        sweetWidth: lockedNearbyTarget.kind === 'monster_carcass' ? 0.38 : 0.34,
-        needleSpeed: lockedNearbyTarget.kind === 'monster_carcass' ? 0.88 : 0.96,
-        sweetCenter: 0.52,
-      }
+    ? getTargetGaugeConfig(lockedNearbyTarget.sizeTier)
     : targetSpec
       ? getManualFishingGaugeConfig(targetSpec, fishingGear)
       : { sweetWidth: 0.28, needleSpeed: 0.85, sweetCenter: 0.5 };
 
   const startCast = () => {
     if (biome === 'deep' && !nearbyTarget) return;
+    const paid = onPayCast(nearbyTarget ? { kind: nearbyTarget.kind, id: nearbyTarget.id } : null);
+    if (!paid.ok) {
+      setCaught(false);
+      setResultMsg(paid.message);
+      setPhase('result');
+      return;
+    }
     if (nearbyTarget) {
       setLockedNearbyTarget(nearbyTarget);
       setTargetSpec(null);
@@ -221,7 +228,7 @@ export const FishingMinigameModal: React.FC<FishingMinigameModalProps> = ({
                     onClick={startCast}
                     className="px-6 py-2.5 bg-[#c99d4e] hover:bg-[#dfb261] text-[#14100b] text-sm font-bold rounded cursor-pointer"
                   >
-                    {nearbyTarget ? 'Haul Target Line' : 'Cast Line Over Side'}
+                    {nearbyTarget ? `Haul Target Line (${nearbyTarget.castCost}g)` : `Cast Line Over Side (${getFishingCastCost(null)}g)`}
                   </button>
                 </>
               )}
@@ -292,7 +299,7 @@ export const FishingMinigameModal: React.FC<FishingMinigameModalProps> = ({
                     onClick={startCast}
                     className="px-5 py-2 bg-[#c99d4e] hover:bg-[#dfb261] text-[#14100b] text-sm font-bold rounded cursor-pointer"
                   >
-                    Try Haul Again
+                    Try Haul Again ({nearbyTarget.castCost}g)
                   </button>
                 )}
                 {!isDeepBarren && !nearbyTarget && (
@@ -302,7 +309,7 @@ export const FishingMinigameModal: React.FC<FishingMinigameModalProps> = ({
                     onClick={startCast}
                     className="px-5 py-2 bg-[#c99d4e] hover:bg-[#dfb261] text-[#14100b] text-sm font-bold rounded cursor-pointer"
                   >
-                    Cast Again
+                    Cast Again ({getFishingCastCost(null)}g)
                   </button>
                 )}
                 <button

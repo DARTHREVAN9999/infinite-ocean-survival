@@ -1,3 +1,4 @@
+import { isPlayerPirateAligned, isPirateAlliedWithPlayer } from './factions';
 import {
   FpsWeaponId,
   FpsWeaponRuntimeState,
@@ -810,6 +811,42 @@ const PIRATE_GUARD_NAMES = [
   'Reef-Blade Tamsin',
 ];
 
+export const TRIBAL_GUARD_NAMES = [
+  'Kaimana', 'Tamo', 'Ruru', 'Haku', 'Ilanu', 'Mako', 'Teva', 'Oro', 'Nalani', 'Pono', 'Wiremu', 'Anela',
+];
+
+export const TRIBE_NAMES = [
+  'Coral-Mask People',
+  'Tidewalker Tribe',
+  'Reef Elders of Ona',
+  'Sun-Shell Clan',
+  'Palm-Spear People',
+  'Mist-Feather Tribe',
+];
+
+export type GuardAttitude = 'hostile' | 'friendly' | 'wary';
+
+/**
+ * How an island's guards treat THIS player.
+ * - Pirates: friendly if you are allied with a pirate faction or your reputation is low (pirate-aligned);
+ *   otherwise hostile. Attacking them makes the whole island hostile.
+ * - Tribe: wary (watching, not attacking) until you ally with them or attack them.
+ */
+export function getGuardAttitude(guard: IslandPirateGuardData, save: SaveData): GuardAttitude {
+  const provoked = Boolean(save.islandProvoked?.includes(guard.islandId));
+  if (guard.tribal) {
+    const standing = save.tribeStanding?.[guard.islandId];
+    if (standing === 'hostile' || provoked) return 'hostile';
+    if (standing === 'allied') return 'friendly';
+    return 'wary';
+  }
+  if (provoked) return 'hostile';
+  const aligned =
+    isPlayerPirateAligned(save.reputation) ||
+    Object.values(save.factions ?? {}).some((f) => isPirateAlliedWithPlayer(f, save.day, save.reputation));
+  return aligned ? 'friendly' : 'hostile';
+}
+
 export function createIslandPirateGuard(
   id: string,
   islandId: string,
@@ -818,14 +855,20 @@ export function createIslandPirateGuard(
   x: number,
   y: number,
   z: number,
-  rand: () => number
+  rand: () => number,
+  tribal = false
 ): IslandPirateGuardData {
   const isPistol = role === 'pistol';
-  const name = PIRATE_GUARD_NAMES[Math.floor(rand() * PIRATE_GUARD_NAMES.length)];
-  const maxHp = isPistol ? 62 : 84;
+  const name = tribal
+    ? TRIBAL_GUARD_NAMES[Math.floor(rand() * TRIBAL_GUARD_NAMES.length)]
+    : PIRATE_GUARD_NAMES[Math.floor(rand() * PIRATE_GUARD_NAMES.length)];
+  const maxHp = tribal ? (isPistol ? 54 : 78) : isPistol ? 62 : 84;
   return {
     id,
-    name: `${name} (${isPistol ? 'Corsair Pistolier' : 'Buccaneer'})`,
+    tribal,
+    name: tribal
+      ? `${name} (${isPistol ? 'Tribal Bowman' : 'Tribal Spearman'})`
+      : `${name} (${isPistol ? 'Corsair Pistolier' : 'Buccaneer'})`,
     islandId,
     chestId,
     role,
@@ -847,9 +890,9 @@ export function createIslandPirateGuard(
     dead: false,
     looted: false,
     animPhase: rand() * Math.PI * 2,
-    lootGold: 16 + Math.floor(rand() * 24),
-    lootGunpowder: isPistol ? 2 + Math.floor(rand() * 3) : 1,
-    lootLeadShot: isPistol ? 4 + Math.floor(rand() * 5) : 1 + Math.floor(rand() * 2),
+    lootGold: tribal ? 8 + Math.floor(rand() * 14) : 16 + Math.floor(rand() * 24),
+    lootGunpowder: tribal ? 0 : isPistol ? 2 + Math.floor(rand() * 3) : 1,
+    lootLeadShot: tribal ? 0 : isPistol ? 4 + Math.floor(rand() * 5) : 1 + Math.floor(rand() * 2),
   };
 }
 
@@ -858,7 +901,8 @@ export function stepIslandPirateGuard(
   playerX: number,
   playerZ: number,
   playerBlocking: boolean,
-  dt: number
+  dt: number,
+  aggressive = true
 ): { meleeDamage: number; rangedShotDamage: number; rangedFired: boolean } {
   if (guard.dead) {
     return { meleeDamage: 0, rangedShotDamage: 0, rangedFired: false };
@@ -890,7 +934,7 @@ export function stepIslandPirateGuard(
     return { meleeDamage: 0, rangedShotDamage: 0, rangedFired: false };
   }
 
-  if (distToPlayer <= aggroRadius) {
+  if (aggressive && distToPlayer <= aggroRadius) {
     guard.heading = Math.atan2(dx, dz);
 
     if (guard.role === 'cutlass') {

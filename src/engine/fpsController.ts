@@ -22,6 +22,7 @@ import {
   fireFpsWeapon,
   isDiscoveryChestGuarded,
   WILDLIFE_SPECS,
+  getGuardAttitude,
 } from '../game/fpsCombat';
 import { checkTreasureDigProximity } from '../game/treasure';
 
@@ -34,7 +35,8 @@ export interface FpsPromptCandidate {
     | 'settlement'
     | 'cave'
     | 'harvest_animal'
-    | 'loot_pirate';
+    | 'loot_pirate'
+    | 'parley_guard';
   id: string;
   label: string;
 }
@@ -481,7 +483,7 @@ export class FirstPersonIslandController {
           kind: 'discovery',
           id: disc.id,
           label: guardCheck.guarded
-            ? `Guarded Chest — Defeat ${guardCheck.remainingCount} Pirate${guardCheck.remainingCount > 1 ? 's' : ''} First`
+            ? `Guarded Chest — Defeat ${guardCheck.remainingCount} Guard${guardCheck.remainingCount > 1 ? 's' : ''} First`
             : disc.requiresDig
               ? `[E] Dig ${disc.name}`
               : `[E] Open ${disc.name}`,
@@ -511,6 +513,24 @@ export class FirstPersonIslandController {
           label: `[E] Enter ${st.name} (${st.kind.replace('_', ' ')})`,
         };
       }
+    }
+
+    // 4b. Parley with living, non-hostile guards (ally with a tribe / ask friendly pirates for a share)
+    for (const g of pirateGuards) {
+      if (g.dead) continue;
+      if (Math.hypot(g.x - this.pos.x, g.z - this.pos.z) > 5.5) continue;
+      const attitude = getGuardAttitude(g, save);
+      if (attitude === 'hostile') continue;
+      const tribeLabel = this.island.tribeName ?? 'tribe';
+      let label: string;
+      if (g.tribal) {
+        label = attitude === 'wary'
+          ? `[E] Offer a Gift & Ally with the ${tribeLabel} (+Reputation) — or attack them`
+          : `[E] Ask the ${tribeLabel} to share their treasure`;
+      } else {
+        label = `[E] Parley with ${g.name} — ask for a share of the treasure`;
+      }
+      return { kind: 'parley_guard', id: g.id, label };
     }
 
     // 5. Loot defeated pirate guards

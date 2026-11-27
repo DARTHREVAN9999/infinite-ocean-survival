@@ -1,7 +1,8 @@
-import type { PirateShipData, WeatherState } from '../game/types';
+import type { WeatherState } from '../game/types';
 
 export interface RemotePlayerState {
   id: string;
+  /** Same as shipName: the vessel name is the only name shown above a ship. */
   name: string;
   shipName: string;
   x: number;
@@ -10,10 +11,12 @@ export interface RemotePlayerState {
   speed: number;
   landed: boolean;
   hullTier: number;
+  reputation: number;
+  hullPct: number;
+  cannons: number;
 }
 
 export interface LocalShipState {
-  name: string;
   shipName: string;
   x: number;
   z: number;
@@ -21,27 +24,71 @@ export interface LocalShipState {
   speed: number;
   landed: boolean;
   hullTier: number;
+  reputation: number;
+  hullPct: number;
+  cannons: number;
 }
+
+export type NpcKind = 'merchant' | 'pirate' | 'monster' | 'wildlife';
+
+/** Position/behavior of a shared bot ship or sea creature, simulated by exactly one owner client. */
+export interface NpcWireState {
+  id: string;
+  kind: NpcKind;
+  x: number;
+  z: number;
+  heading: number;
+  speed: number;
+  behavior?: string;
+  hullPct?: number;
+  ownerId?: string;
+}
+
+/** A persistent change to the shared world (bot ship gold/stock, looted wreck, defeated pirate...). */
+export interface WorldPatch {
+  kind: string;
+  id: string;
+  data: Record<string, unknown>;
+  rev?: number;
+}
+
+export type WeatherSnapshot = {
+  weather: WeatherState;
+  tornadoPos: { x: number; z: number; vx: number; vz: number; active: boolean } | null;
+};
+
+export type RelayType =
+  | 'trade-offer' | 'trade-response' | 'trade-commit' | 'trade-cancel'
+  | 'pvp-attack' | 'pvp-volley' | 'pvp-down' | 'pvp-end';
 
 export type MultiplayerStatus = 'connecting' | 'online' | 'reconnecting' | 'offline' | 'full';
 
 interface MultiplayerCallbacks {
   onStatus: (status: MultiplayerStatus, message?: string) => void;
-  onWelcome: (data: { worldSeed: number; spawn: { x: number; z: number; heading: number } | null; isWorldLeader: boolean; weather: { weather: WeatherState; tornadoPos: { x: number; z: number; vx: number; vz: number; active: boolean } | null } | null; pirates: PirateShipData[] }) => void;
+  onWelcome: (data: {
+    playerId: string;
+    worldSeed: number;
+    spawn: { x: number; z: number; heading: number } | null;
+    isWorldLeader: boolean;
+    weather: WeatherSnapshot | null;
+    patches: WorldPatch[];
+    npcs: NpcWireState[];
+  }) => void;
   onWorldAuthority: (isAuthority: boolean) => void;
-  onWorldWeather: (state: { weather: WeatherState; tornadoPos: { x: number; z: number; vx: number; vz: number; active: boolean } | null }) => void;
-  onWorldPirates: (pirates: PirateShipData[]) => void;
-  onStateCorrection: (state: LocalShipState) => void;
+  onWorldWeather: (state: WeatherSnapshot) => void;
+  onPatches: (patches: WorldPatch[]) => void;
+  onNpcStates: (npcs: NpcWireState[]) => void;
   onPlayers: (players: RemotePlayerState[]) => void;
   onRespawn: (spawn: { x: number; z: number; heading: number }) => void;
+  onRelay: (type: RelayType, from: string, fromName: string, payload: any) => void;
+  onRelayFailed: (reason: string) => void;
   getLocalState: () => LocalShipState | null;
-  getLocalWeatherState: () => { weather: WeatherState; tornadoPos: { x: number; z: number; vx: number; vz: number; active: boolean } | null } | null;
-  getLocalPirateStates: () => PirateShipData[];
+  getLocalWeatherState: () => WeatherSnapshot | null;
+  getOwnedNpcStates: () => NpcWireState[];
 }
 
 const PLAYER_ID_KEY = 'oceanbound_mp_player_id_v1';
 const HAS_SPAWNED_KEY = 'oceanbound_mp_has_spawned_v1';
-const PLAYER_NAME_KEY = 'oceanbound_mp_player_name_v1';
 
 function getOrCreatePlayerId(): string {
   try {
@@ -57,36 +104,20 @@ function getOrCreatePlayerId(): string {
   }
 }
 
-export function loadMultiplayerName(): string {
-  try {
-    return localStorage.getItem(PLAYER_NAME_KEY) || 'Captain';
-  } catch {
-    return 'Captain';
-  }
-}
-
-export function saveMultiplayerName(name: string): void {
-  try {
-    localStorage.setItem(PLAYER_NAME_KEY, name.trim().slice(0, 22) || 'Captain');
-  } catch {
-    // Private browsing or storage restrictions should not prevent joining.
-  }
-}
-
 export class MultiplayerClient {
   private socket: WebSocket | null = null;
-  private readonly playerId = getOrCreatePlayerId();
+  public readonly playerId = getOrCreatePlayerId();
   private callbacks: MultiplayerCallbacks;
   private remotePlayers = new Map<string, RemotePlayerState>();
   private reconnectTimer: number | null = null;
   private heartbeatTimer: number | null = null;
   private stateTimer: number | null = null;
+  private npcTimer: number | null = null;
   private respawnTimer: number | null = null;
-  private worldSyncTimer: number | null = null;
+  private weatherTimer: number | null = null;
   private isWorldLeader = false;
   private shouldReconnect = true;
   private hasSpawned = false;
-  private name = loadMultiplayerName();
   private shipName = 'Unnamed Vessel';
   private connectAttempt = 0;
 
@@ -99,10 +130,8 @@ export class MultiplayerClient {
     }
   }
 
-  public connect(name: string, shipName: string): void {
-    this.name = name.trim().slice(0, 22) || 'Captain';
+  public connect(shipName: string): void {
     this.shipName = shipName.trim().slice(0, 22) || 'Unnamed Vessel';
-    saveMultiplayerName(this.name);
     this.shouldReconnect = true;
     this.openSocket();
   }
@@ -130,14 +159,12 @@ export class MultiplayerClient {
 
     socket.addEventListener('open', () => {
       this.connectAttempt = 0;
-      const state = this.callbacks.getLocalState();
       this.send({
         type: 'join',
         id: this.playerId,
-        name: this.name,
         shipName: this.shipName,
         hasSpawned: this.hasSpawned,
-        state,
+        state: this.callbacks.getLocalState(),
       });
       this.callbacks.onStatus('connecting', 'Joining the shared ocean…');
       this.startTimers();
@@ -166,90 +193,91 @@ export class MultiplayerClient {
       return;
     }
 
-    if (message.type === 'welcome') {
-      this.callbacks.onStatus('online');
-      this.remotePlayers.clear();
-      for (const player of Array.isArray(message.players) ? message.players : []) {
-        if (player?.id && player.id !== this.playerId) {
-          this.remotePlayers.set(player.id, player as RemotePlayerState);
+    switch (message.type) {
+      case 'welcome': {
+        this.callbacks.onStatus('online');
+        this.remotePlayers.clear();
+        for (const player of Array.isArray(message.players) ? message.players : []) {
+          if (player?.id && player.id !== this.playerId) {
+            this.remotePlayers.set(player.id, player as RemotePlayerState);
+          }
         }
-      }
-      if (message.spawn && Number.isFinite(message.spawn.x) && Number.isFinite(message.spawn.z)) {
-        this.hasSpawned = true;
-        try { localStorage.setItem(HAS_SPAWNED_KEY, '1'); } catch { /* ignore */ }
-      }
-      this.isWorldLeader = String(message.worldLeaderId || '') === this.playerId;
-      this.callbacks.onWorldAuthority(this.isWorldLeader);
-      if (message.weather?.weather) this.callbacks.onWorldWeather(message.weather);
-      if (Array.isArray(message.pirates)) this.callbacks.onWorldPirates(message.pirates as PirateShipData[]);
-      this.callbacks.onWelcome({
-        worldSeed: Number(message.worldSeed) || 731296,
-        spawn: message.spawn ?? null,
-        isWorldLeader: this.isWorldLeader,
-        weather: message.weather?.weather ? message.weather : null,
-        pirates: Array.isArray(message.pirates) ? message.pirates as PirateShipData[] : [],
-      });
-      this.emitPlayers();
-      return;
-    }
-
-    if (message.type === 'player-joined' || message.type === 'player-update') {
-      const player = message.player as RemotePlayerState | undefined;
-      if (player?.id && player.id !== this.playerId) {
-        this.remotePlayers.set(player.id, player);
+        if (message.spawn && Number.isFinite(message.spawn.x) && Number.isFinite(message.spawn.z)) {
+          this.hasSpawned = true;
+          try { localStorage.setItem(HAS_SPAWNED_KEY, '1'); } catch { /* ignore */ }
+        }
+        this.isWorldLeader = String(message.worldLeaderId || '') === this.playerId;
+        this.callbacks.onWelcome({
+          playerId: this.playerId,
+          worldSeed: Number(message.worldSeed) || 731296,
+          spawn: message.spawn ?? null,
+          isWorldLeader: this.isWorldLeader,
+          weather: message.weather?.weather ? (message.weather as WeatherSnapshot) : null,
+          patches: Array.isArray(message.patches) ? (message.patches as WorldPatch[]) : [],
+          npcs: Array.isArray(message.npcs) ? (message.npcs as NpcWireState[]) : [],
+        });
         this.emitPlayers();
+        return;
       }
-      return;
-    }
-
-    if (message.type === 'player-left') {
-      if (message.id) this.remotePlayers.delete(String(message.id));
-      this.emitPlayers();
-      return;
-    }
-
-    if (message.type === 'state-correction' && message.state) {
-      this.callbacks.onStateCorrection(message.state as LocalShipState);
-      return;
-    }
-
-    if (message.type === 'world-leader') {
-      this.isWorldLeader = String(message.leaderId || '') === this.playerId;
-      this.callbacks.onWorldAuthority(this.isWorldLeader);
-      if (message.weather?.weather) this.callbacks.onWorldWeather(message.weather);
-      if (Array.isArray(message.pirates)) this.callbacks.onWorldPirates(message.pirates as PirateShipData[]);
-      return;
-    }
-
-    if (message.type === 'world-weather' && message.state?.weather) {
-      this.callbacks.onWorldWeather(message.state);
-      return;
-    }
-
-    if (message.type === 'world-pirates' && Array.isArray(message.pirates)) {
-      this.callbacks.onWorldPirates(message.pirates as PirateShipData[]);
-      return;
-    }
-
-    if (message.type === 'respawn') {
-      const spawn = message.spawn;
-      if (this.respawnTimer !== null) window.clearTimeout(this.respawnTimer);
-      this.respawnTimer = null;
-      if (spawn && Number.isFinite(spawn.x) && Number.isFinite(spawn.z)) {
-        this.callbacks.onRespawn(spawn);
+      case 'player-joined':
+      case 'player-update': {
+        const player = message.player as RemotePlayerState | undefined;
+        if (player?.id && player.id !== this.playerId) {
+          this.remotePlayers.set(player.id, player);
+          this.emitPlayers();
+        }
+        return;
       }
-      return;
-    }
-
-    if (message.type === 'full') {
-      this.callbacks.onStatus('full', message.message || 'The ocean server is full.');
-      this.shouldReconnect = false;
-      this.stopTimers();
-      return;
-    }
-
-    if (message.type === 'error') {
-      this.callbacks.onStatus('reconnecting', message.message || 'Multiplayer connection error.');
+      case 'player-left':
+        if (message.id) this.remotePlayers.delete(String(message.id));
+        this.emitPlayers();
+        return;
+      case 'world-leader':
+        this.isWorldLeader = String(message.leaderId || '') === this.playerId;
+        this.callbacks.onWorldAuthority(this.isWorldLeader);
+        if (message.weather?.weather) this.callbacks.onWorldWeather(message.weather);
+        return;
+      case 'world-weather':
+        if (message.state?.weather) this.callbacks.onWorldWeather(message.state);
+        return;
+      case 'world-patch':
+        if (message.patch?.kind && message.patch?.id) this.callbacks.onPatches([message.patch as WorldPatch]);
+        return;
+      case 'npc-states':
+        if (Array.isArray(message.npcs)) this.callbacks.onNpcStates(message.npcs as NpcWireState[]);
+        return;
+      case 'respawn': {
+        const spawn = message.spawn;
+        if (this.respawnTimer !== null) window.clearTimeout(this.respawnTimer);
+        this.respawnTimer = null;
+        if (spawn && Number.isFinite(spawn.x) && Number.isFinite(spawn.z)) {
+          this.callbacks.onRespawn(spawn);
+        }
+        return;
+      }
+      case 'trade-offer':
+      case 'trade-response':
+      case 'trade-commit':
+      case 'trade-cancel':
+      case 'pvp-attack':
+      case 'pvp-volley':
+      case 'pvp-down':
+      case 'pvp-end':
+        this.callbacks.onRelay(message.type as RelayType, String(message.from || ''), String(message.fromName || 'Unknown Vessel'), message.payload ?? {});
+        return;
+      case 'relay-failed':
+        this.callbacks.onRelayFailed(String(message.reason || 'That could not be delivered.'));
+        return;
+      case 'full':
+        this.callbacks.onStatus('full', message.message || 'The ocean server is full.');
+        this.shouldReconnect = false;
+        this.stopTimers();
+        return;
+      case 'error':
+        this.callbacks.onStatus('reconnecting', message.message || 'Multiplayer connection error.');
+        return;
+      default:
+        return;
     }
   }
 
@@ -273,25 +301,30 @@ export class MultiplayerClient {
     this.stateTimer = window.setInterval(() => {
       const state = this.callbacks.getLocalState();
       if (state) this.send({ type: 'state', state });
+    }, 200);
+    this.npcTimer = window.setInterval(() => {
+      const npcs = this.callbacks.getOwnedNpcStates();
+      if (npcs.length > 0) this.send({ type: 'npc-batch', npcs });
     }, 250);
     this.heartbeatTimer = window.setInterval(() => {
       this.send({ type: 'heartbeat' });
     }, 15_000);
-    this.worldSyncTimer = window.setInterval(() => {
+    this.weatherTimer = window.setInterval(() => {
       if (!this.isWorldLeader) return;
       const weather = this.callbacks.getLocalWeatherState();
       if (weather) this.send({ type: 'world-weather', state: weather });
-      this.send({ type: 'world-pirates', pirates: this.callbacks.getLocalPirateStates() });
     }, 1000);
   }
 
   private stopTimers(): void {
     if (this.stateTimer !== null) window.clearInterval(this.stateTimer);
+    if (this.npcTimer !== null) window.clearInterval(this.npcTimer);
     if (this.heartbeatTimer !== null) window.clearInterval(this.heartbeatTimer);
-    if (this.worldSyncTimer !== null) window.clearInterval(this.worldSyncTimer);
+    if (this.weatherTimer !== null) window.clearInterval(this.weatherTimer);
     this.stateTimer = null;
+    this.npcTimer = null;
     this.heartbeatTimer = null;
-    this.worldSyncTimer = null;
+    this.weatherTimer = null;
   }
 
   private scheduleReconnect(): void {
@@ -305,11 +338,20 @@ export class MultiplayerClient {
     }, delay);
   }
 
-  public updateProfile(name: string, shipName: string): void {
-    this.name = name.trim().slice(0, 22) || 'Captain';
+  /** The vessel name is the only public name. */
+  public updateProfile(shipName: string): void {
     this.shipName = shipName.trim().slice(0, 22) || 'Unnamed Vessel';
-    saveMultiplayerName(this.name);
-    this.send({ type: 'name', name: this.name, shipName: this.shipName });
+    this.send({ type: 'name', shipName: this.shipName });
+  }
+
+  /** Persist a change to the one shared world (gold/stock on a bot ship, looted wreck...). */
+  public sendPatch(kind: string, id: string, data: Record<string, unknown>): void {
+    this.send({ type: 'patch', kind, id, data });
+  }
+
+  /** Send a message to one other player (trade offers, PvP). */
+  public sendRelay(type: RelayType, to: string, payload: Record<string, unknown> = {}): boolean {
+    return this.send({ type, to, payload });
   }
 
   public requestRespawn(): boolean {

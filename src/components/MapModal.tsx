@@ -2,12 +2,23 @@ import React, { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { SaveData } from '../game/types';
 
+export interface MapPlayer {
+  id: string;
+  shipName: string;
+  x: number;
+  z: number;
+  heading: number;
+  reputation: number;
+  landed: boolean;
+}
+
 interface MapModalProps {
   save: SaveData;
+  otherPlayers?: MapPlayer[];
   onClose: () => void;
 }
 
-export const MapModal: React.FC<MapModalProps> = ({ save, onClose }) => {
+export const MapModal: React.FC<MapModalProps> = ({ save, otherPlayers = [], onClose }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -190,6 +201,41 @@ export const MapModal: React.FC<MapModalProps> = ({ save, onClose }) => {
       ctx.fillText(labelText, sx + 9, chosenY);
     }
 
+    // Other online captains (shown with their vessel name; off-chart ships get an edge arrow)
+    ctx.font = 'bold 11px "Plus Jakarta Sans", sans-serif';
+    for (const op of otherPlayers as MapPlayer[]) {
+      const sx = w * 0.5 + (op.x - px) * scale;
+      const sy = h * 0.5 + (op.z - pz) * scale;
+      const onChart = sx >= 12 && sx <= w - 12 && sy >= 12 && sy <= h - 12;
+      const ex = Math.max(16, Math.min(w - 16, sx));
+      const ey = Math.max(16, Math.min(h - 16, sy));
+      ctx.save();
+      ctx.translate(ex, ey);
+      if (onChart) ctx.rotate(-op.heading);
+      else ctx.rotate(Math.atan2(sy - h * 0.5, sx - w * 0.5) + Math.PI / 2);
+      ctx.fillStyle = '#2b8fd6';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, -9);
+      ctx.lineTo(6.5, 7);
+      ctx.lineTo(0, 3);
+      ctx.lineTo(-6.5, 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      const label = `${op.shipName.length > 16 ? `${op.shipName.slice(0, 15)}…` : op.shipName} (${op.reputation > 0 ? '+' : ''}${op.reputation})`;
+      const tw = ctx.measureText(label).width;
+      const lx = Math.max(4, Math.min(w - tw - 4, ex + 10));
+      ctx.strokeStyle = '#efe2c5';
+      ctx.lineWidth = 3.2;
+      ctx.lineJoin = 'round';
+      ctx.strokeText(label, lx, ey + 4);
+      ctx.fillStyle = '#10436b';
+      ctx.fillText(label, lx, ey + 4);
+    }
+
     // Player vessel
     ctx.save();
     ctx.translate(w * 0.5, h * 0.5);
@@ -223,7 +269,7 @@ export const MapModal: React.FC<MapModalProps> = ({ save, onClose }) => {
     ctx.fillText('W', rx - 15, ry + 4);
     ctx.fillText('E', rx + 15, ry + 4);
     ctx.textAlign = 'left';
-  }, [save]);
+  }, [save, otherPlayers]);
 
   return (
     <div

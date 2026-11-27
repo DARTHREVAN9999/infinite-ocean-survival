@@ -1,8 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import type { RemotePlayerState } from '../network/MultiplayerClient';
+import type { RemotePlayerState, NpcWireState, WorldPatch, RelayType } from '../network/MultiplayerClient';
 import {
-  AdminTeleportTarget,
   ActiveEnemyStatus,
   BattleDamageMark,
   BountyContract,
@@ -185,9 +184,13 @@ import {
   fishNearMarineWildlife,
   fishNearMonsterCarcass,
   stepCrewFishing,
+  WILDLIFE_FISH_TIER,
+  MONSTER_FISH_TIER,
+  getFishingCastCost,
 } from '../game/fishing';
 import {
   damageIslandPirateGuard,
+  getGuardAttitude,
   damageWildlifeActor,
   FPS_WEAPON_SPECS,
   FpsMouseInputState,
@@ -490,6 +493,9 @@ interface RemotePlayerShipView {
   name: string;
   shipName: string;
   hullTier: number;
+  reputation: number;
+  hullPct: number;
+  cannons: number;
   x: number;
   z: number;
   heading: number;
@@ -518,6 +524,28 @@ interface ActiveParticle {
   b: number;
 }
 
+export interface PlayerTradeOffer {
+  giveGold: number;
+  giveRes: ResourceId | null;
+  giveQty: number;
+  askGold: number;
+  askRes: ResourceId | null;
+  askQty: number;
+}
+
+export interface IncomingTradeOffer {
+  offerId: string;
+  from: string;
+  fromName: string;
+  offer: PlayerTradeOffer;
+}
+
+/** What the engine needs from the network layer. */
+export interface NetBridge {
+  sendPatch: (kind: string, id: string, data: Record<string, unknown>) => void;
+  sendRelay: (type: RelayType, to: string, payload?: Record<string, unknown>) => boolean;
+}
+
 export interface EngineCallbacks {
   onHudUpdate: (snap: HudSnapshot) => void;
   onPirateHail: (pirate: PirateShipData) => void;
@@ -529,6 +557,7 @@ export interface EngineCallbacks {
   onSaveUpdate: (save: SaveData) => void;
   onHotkeyMenu: (menu: 'ship' | 'journal' | 'map' | 'pause' | 'interact' | 'fishing') => void;
   onPlayerDeath?: (details: { cause: string; lostGold: number }) => void;
+  onIncomingTradeOffer?: (offer: IncomingTradeOffer) => void;
 }
 
 export class OceanEngine {
@@ -557,6 +586,19 @@ export class OceanEngine {
   private remotePlayers = new Map<string, RemotePlayerShipView>();
   private remoteChunkStreams = new Map<string, string>();
   private isMultiplayerWorldAuthority = true;
+  private net: NetBridge | null = null;
+  private myPlayerId = '';
+  private npcRemote = new Map<string, { ownerId: string; x: number; z: number; heading: number; speed: number; behavior?: string; hullPct?: number; ts: number }>();
+  private sharedStore = new Map<string, Record<string, unknown>>();
+  private sharedTracked = new Map<string, { obj: object; get: () => Record<string, unknown>; fp: string }>();
+  private sharedPublishedIds: Record<'wreck' | 'crate' | 'pirate' | 'monster' | 'discovery', Set<string>> = {
+    wreck: new Set(), crate: new Set(), pirate: new Set(), monster: new Set(), discovery: new Set(),
+  };
+  private sharedReady = false;
+  private sharedAccum = 0;
+  private pvpOpponents = new Set<string>();
+  private pendingOutgoingTrades = new Map<string, { to: string; offer: PlayerTradeOffer }>();
+  private pendingIncomingTrades = new Map<string, { from: string; fromName: string; offer: PlayerTradeOffer }>();
   private lastKnownCrew: CrewMember[] = [];
   private multiplayerWorldSeed: number | null = null;
   private phase: 'title' | 'playing' | 'paused' | 'gameover' = 'title';
@@ -717,8 +759,6 @@ export class OceanEngine {
   private lightningBolts: Array<{ mesh: THREE.Mesh; life: number }> = [];
   private hailImpactTimer = 0;
   private steeringHexTimer = 0;
-  private adminUnlocked = false;
-  private adminEnabled = false;
   private fleetDistressAlerts: FleetDistressAlert[] = [];
   private lastSunkHostileMerchant: MerchantShipData | null = null;
 
@@ -1240,61 +1280,390 @@ export class OceanEngine {
     }
   }
 
-  public applyMultiplayerCorrection(state: { x: number; z: number; heading?: number; speed?: number }): void {
-    if (!Number.isFinite(state.x) || !Number.isFinite(state.z)) return;
-    const p = this.saveData.player;
-    p.x = state.x;
-    p.z = state.z;
-    if (Number.isFinite(state.heading)) p.heading = state.heading!;
-    if (Number.isFinite(state.speed)) p.speed = state.speed!;
-    this.playerShip.root.position.x = p.x;
-    this.playerShip.root.position.z = p.z;
-    this.playerShip.root.rotation.y = p.heading;
+  // ===========================================================================
+  // One shared world: bot ships / sea monsters are simulated by one owner (the nearest player)
+  // and rendered by everyone else; persistent changes travel as patches stored on the server.
+  // ===========================================================================
+
+  public setNetBridge(net: NetBridge | null): void {
+    this.net = net;
   }
 
-  public getMultiplayerPirateStates(): PirateShipData[] {
-    // The elected world authority publishes the active NPC ships it has loaded
-    // around all connected captains, including standard chunk-generated pirates.
-    const playerCenters = [
-      { x: this.saveData.player.x, z: this.saveData.player.z },
-      ...[...this.remotePlayers.values()].map((remote) => ({ x: remote.targetX, z: remote.targetZ })),
-    ];
-    const nearestDistance = (pirate: PirateShipData) => Math.min(
-      ...playerCenters.map((center) => Math.hypot(pirate.x - center.x, pirate.z - center.z))
-    );
-    return [...this.pirates.values()]
-      .map((entry) => entry.data)
-      .filter((pirate) => Number.isFinite(pirate.x) && Number.isFinite(pirate.z))
-      .sort((a, b) => nearestDistance(a) - nearestDistance(b))
-      .slice(0, 32)
-      .map((pirate) => JSON.parse(JSON.stringify(pirate)) as PirateShipData);
+  public setMyPlayerId(id: string): void {
+    this.myPlayerId = id;
   }
 
-  public syncSharedPirateStates(pirates: PirateShipData[]): void {
-    for (const state of pirates.slice(0, 32)) {
-      if (!state?.id || !Number.isFinite(state.x) || !Number.isFinite(state.z)) continue;
-      let entry = this.pirates.get(state.id);
-      if (!entry) {
-        const base = generatePirateShip(state.id, state.x, state.z, state.tier, this.rand);
-        Object.assign(base, state);
-        const built = buildNpcShip(base.hullArchetype, 'pirate', this.textures, base.factionId, Math.min(14, base.cannons), Boolean(base.isGhost), base.ghostSize);
-        built.root.position.set(base.x, 0, base.z);
-        built.root.rotation.y = base.heading;
-        this.scene.add(built.root);
-        entry = {
-          data: base, mesh: built.root, sails: built.sails, flagMesh: built.flagMesh,
-          ghostFog: built.ghostFog, fadeMaterials: built.fadeMaterials, cannonGroups: built.cannonGroups,
-          damagePatches: built.damagePatches, crewActors: built.crewActors, halfLength: built.halfLength,
-          halfBeam: built.halfBeam, cannonRecoil: 0, impactRoll: 0, impactPitch: 0, smokeAccum: 0,
-        };
-        this.pirates.set(base.id, entry);
-        if (base.id.startsWith('hunter_')) this.hunterIds.add(base.id);
-      } else {
-        Object.assign(entry.data, state);
-        entry.mesh.position.x = state.x;
-        entry.mesh.position.z = state.z;
-        entry.mesh.rotation.y = state.heading;
+  /** Nearest distance from a point to the local player or any connected remote player. */
+  private distToNearestPlayer(x: number, z: number): number {
+    let best = Math.hypot(x - this.saveData.player.x, z - this.saveData.player.z);
+    for (const remote of this.remotePlayers.values()) {
+      best = Math.min(best, Math.hypot(x - remote.targetX, z - remote.targetZ));
+    }
+    return best;
+  }
+
+  /** The owner's latest state for an NPC if another player currently simulates it. */
+  private getRemoteNpc(id: string): { ownerId: string; x: number; z: number; heading: number; speed: number; behavior?: string; hullPct?: number; ts: number } | null {
+    const r = this.npcRemote.get(id);
+    if (!r) return null;
+    if (r.ownerId === this.myPlayerId) return null;
+    if (performance.now() - r.ts > 5000) return null;
+    return r;
+  }
+
+  public applyNpcStates(list: NpcWireState[]): void {
+    const now = performance.now();
+    for (const s of list) {
+      if (!s?.id || !s.ownerId || s.ownerId === this.myPlayerId) continue;
+      if (!Number.isFinite(s.x) || !Number.isFinite(s.z)) continue;
+      this.npcRemote.set(s.id, {
+        ownerId: s.ownerId,
+        x: s.x,
+        z: s.z,
+        heading: s.heading,
+        speed: s.speed,
+        behavior: s.behavior,
+        hullPct: s.hullPct,
+        ts: now,
+      });
+    }
+  }
+
+  /** Smoothly move a locally-loaded NPC to where its owner says it is. */
+  private driveRemoteNpc(
+    data: { x: number; z: number; heading: number; speed: number },
+    remote: { x: number; z: number; heading: number; speed: number },
+    dt: number
+  ): void {
+    if (Math.hypot(remote.x - data.x, remote.z - data.z) > 60) {
+      data.x = remote.x;
+      data.z = remote.z;
+      data.heading = remote.heading;
+    } else {
+      const blend = 1 - Math.exp(-Math.max(0.001, dt) * 8);
+      data.x += (remote.x - data.x) * blend;
+      data.z += (remote.z - data.z) * blend;
+      data.heading = normalizeAngle(data.heading + normalizeAngle(remote.heading - data.heading) * blend);
+    }
+    data.speed = remote.speed;
+  }
+
+  /** NPCs this client simulates (and therefore reports) = those near this player that nobody else owns. */
+  public getOwnedNpcStates(): NpcWireState[] {
+    const px = this.saveData.player.x;
+    const pz = this.saveData.player.z;
+    const out: NpcWireState[] = [];
+    const consider = (kind: NpcWireState['kind'], id: string, d: { x: number; z: number; heading: number; speed: number }, hullPct?: number, behavior?: string) => {
+      if (Math.hypot(d.x - px, d.z - pz) > 900) return;
+      if (this.getRemoteNpc(id)) return;
+      out.push({ id, kind, x: d.x, z: d.z, heading: d.heading, speed: d.speed, hullPct, behavior });
+    };
+    for (const e of this.merchants.values()) {
+      if (e.data.sunk) continue;
+      consider('merchant', e.data.id, e.data, e.data.maxHull > 0 ? (e.data.hull / e.data.maxHull) * 100 : 100);
+    }
+    for (const e of this.pirates.values()) {
+      if (e.data.defeated || e.data.playerId) continue;
+      consider('pirate', e.data.id, e.data, e.data.maxHull > 0 ? (e.data.hull / e.data.maxHull) * 100 : 100, e.data.behavior);
+    }
+    for (const e of this.monsters.values()) {
+      if (e.data.defeated) continue;
+      consider('monster', e.data.id, e.data);
+    }
+    return out.slice(0, 100);
+  }
+
+  // --- Persistent shared patches --------------------------------------------------------------
+
+  private sharedKey(kind: string, id: string): string {
+    return `${kind}:${id}`;
+  }
+
+  /** Apply the server's full set of patches on join and make the local world match the shared one. */
+  public applyInitialWorldPatches(patches: WorldPatch[]): void {
+    // The shared world is the single source of truth: forget purely local progress for shared things.
+    this.lootedWreckIds = new Set();
+    this.collectedCrateIds = new Set();
+    this.defeatedPirateIds = new Set();
+    this.defeatedMonsterIds = new Set();
+    this.sharedPublishedIds = { wreck: new Set(), crate: new Set(), pirate: new Set(), monster: new Set(), discovery: new Set() };
+    this.sharedStore.clear();
+    this.sharedTracked.clear();
+    this.applyWorldPatches(patches);
+    this.sharedReady = true;
+    // Reload the surrounding chunks so they are generated from the shared state.
+    this.hydrateFromSave(JSON.parse(JSON.stringify(this.getSaveSnapshot())) as SaveData);
+  }
+
+  public applyWorldPatches(patches: WorldPatch[]): void {
+    for (const patch of patches) {
+      if (!patch?.kind || !patch?.id || !patch.data) continue;
+      const key = this.sharedKey(patch.kind, patch.id);
+      this.sharedStore.set(key, { ...(this.sharedStore.get(key) ?? {}), ...patch.data });
+      const data = patch.data as Record<string, any>;
+      switch (patch.kind) {
+        case 'wreck': {
+          if (data.looted) {
+            this.lootedWreckIds.add(patch.id);
+            this.sharedPublishedIds.wreck.add(patch.id);
+          }
+          const live = this.wrecks.get(patch.id);
+          if (live) this.applyWreckPatch(live.data, data);
+          if (Array.isArray(data.sections)) {
+            this.saveData.searchedWreckSections[patch.id] = Array.from(new Set([...(this.saveData.searchedWreckSections[patch.id] ?? []), ...data.sections]));
+          }
+          break;
+        }
+        case 'crate': {
+          this.collectedCrateIds.add(patch.id);
+          this.sharedPublishedIds.crate.add(patch.id);
+          const live = this.crates.get(patch.id);
+          if (live) { this.scene.remove(live.mesh); this.crates.delete(patch.id); }
+          break;
+        }
+        case 'pirate': {
+          if (data.defeated) {
+            this.defeatedPirateIds.add(patch.id);
+            this.sharedPublishedIds.pirate.add(patch.id);
+            this.removePirateLocally(patch.id);
+          } else {
+            const live = this.pirates.get(patch.id);
+            if (live) this.applyPiratePatch(live.data, data);
+          }
+          break;
+        }
+        case 'monster': {
+          if (data.defeated) this.defeatedMonsterIds.add(patch.id);
+          const live = this.monsters.get(patch.id);
+          if (live) this.applyMonsterPatch(live.data, data);
+          break;
+        }
+        case 'discovery': {
+          if (!this.saveData.collectedDiscoveryIds) this.saveData.collectedDiscoveryIds = [];
+          if (!this.saveData.collectedDiscoveryIds.includes(patch.id)) this.saveData.collectedDiscoveryIds.push(patch.id);
+          this.sharedPublishedIds.discovery.add(patch.id);
+          for (const isl of this.islands.values()) {
+            for (const d of isl.data.discoveries) if (d.id === patch.id) d.collected = true;
+            for (const b of isl.data.beachedWrecks) if (b.id === patch.id) b.searched = true;
+          }
+          break;
+        }
+        case 'merchant': {
+          const live = this.merchants.get(patch.id);
+          if (live) this.applyMerchantPatch(live.data, data);
+          break;
+        }
+        case 'settlement': {
+          const st = this.getSettlementById(patch.id);
+          if (st) this.applySettlementPatch(st, data);
+          break;
+        }
+        case 'guard': {
+          const live = this.islandPirateGuards.get(patch.id);
+          if (live) this.applyGuardPatch(live, data);
+          break;
+        }
+        case 'wildlife': {
+          const live = this.wildlife.get(patch.id);
+          if (live) this.applyWildlifePatch(live, data);
+          break;
+        }
+        default:
+          break;
       }
+      // Entities that are loaded now already match; refresh their fingerprint so we don't echo it back.
+      const tracked = this.sharedTracked.get(key);
+      if (tracked) tracked.fp = JSON.stringify(tracked.get());
+    }
+  }
+
+  private applyWreckPatch(w: ShipwreckData, d: Record<string, any>): void {
+    if (d.looted !== undefined) w.fullyLooted = Boolean(d.looted) || w.fullyLooted;
+  }
+
+  private applyPiratePatch(p: PirateShipData, d: Record<string, any>): void {
+    if (d.hull !== undefined) p.hull = Math.min(p.hull, Number(d.hull));
+    if (d.crewCount !== undefined) p.crewCount = Math.min(p.crewCount, Number(d.crewCount));
+    if (d.cannons !== undefined) p.cannons = Math.min(p.cannons, Number(d.cannons));
+  }
+
+  private applyMonsterPatch(m: SeaMonsterData, d: Record<string, any>): void {
+    if (d.hp !== undefined) m.hp = Math.min(m.hp, Number(d.hp));
+    if (d.defeated && !m.defeated) {
+      m.defeated = true;
+      m.hp = 0;
+      if (d.carcassRemainingFood !== undefined) m.carcassRemainingFood = Number(d.carcassRemainingFood);
+      if (d.carcassRemainingSalt !== undefined) m.carcassRemainingSalt = Number(d.carcassRemainingSalt);
+      if ((m.carcassTimer ?? 0) <= 0) m.carcassTimer = 240;
+      this.combat.enemies = this.getCombatEnemies().filter((e) => e.id !== m.id);
+      this.syncCombatPrimaryFields();
+    }
+    if (d.carcassHarvested) {
+      m.carcassHarvested = true;
+      m.carcassRemainingFood = 0;
+      m.carcassRemainingSalt = 0;
+    }
+  }
+
+  private applyMerchantPatch(m: MerchantShipData, d: Record<string, any>): void {
+    if (d.gold !== undefined) m.gold = Number(d.gold);
+    if (d.stock && typeof d.stock === 'object') m.stock = { ...m.stock, ...d.stock };
+    if (d.hull !== undefined) m.hull = Math.min(m.hull, Number(d.hull));
+    if (d.crewCount !== undefined) m.crewCount = Number(d.crewCount);
+    if (d.cannons !== undefined) m.cannons = Number(d.cannons);
+    if (d.robbed !== undefined) m.robbed = m.robbed || Boolean(d.robbed);
+    if (d.hostileToPlayer !== undefined) m.hostileToPlayer = Boolean(d.hostileToPlayer);
+    if (d.surrenderedToPlayer !== undefined) m.surrenderedToPlayer = Boolean(d.surrenderedToPlayer);
+    if (d.recruited !== undefined) m.recruited = m.recruited || Boolean(d.recruited);
+    if (Array.isArray(d.hireableCrewIds)) m.hireableCrew = m.hireableCrew.filter((c) => d.hireableCrewIds.includes(c.id));
+    if (d.sunk && !m.sunk) {
+      m.sunk = true;
+      m.hull = 0;
+      m.sinkProgress = m.sinkProgress ?? 0;
+      this.combat.enemies = this.getCombatEnemies().filter((e) => e.id !== m.id);
+      this.syncCombatPrimaryFields();
+    }
+  }
+
+  private applySettlementPatch(st: IslandSettlementData, d: Record<string, any>): void {
+    if (d.gold !== undefined) st.gold = Number(d.gold);
+    if (d.stock && typeof d.stock === 'object') st.stock = { ...st.stock, ...d.stock };
+  }
+
+  private applyGuardPatch(entry: { data: IslandPirateGuardData; built: BuiltIslandPirateGuard }, d: Record<string, any>): void {
+    const g = entry.data;
+    if (d.hp !== undefined) g.hp = Math.min(g.hp, Number(d.hp));
+    if (d.dead) g.dead = true;
+    if (d.looted) {
+      g.looted = true;
+      entry.built.root.visible = false;
+    }
+  }
+
+  private applyWildlifePatch(entry: { data: WildlifeActorData; built: BuiltWildlife }, d: Record<string, any>): void {
+    if (d.harvested) {
+      entry.data.harvested = true;
+      entry.data.dead = true;
+      entry.built.root.visible = false;
+    }
+    if (d.dead) entry.data.dead = true;
+  }
+
+  /** Remove a pirate that another player defeated (or that is otherwise gone from the shared world). */
+  private removePirateLocally(id: string): void {
+    const entry = this.pirates.get(id);
+    if (!entry) return;
+    this.spawnShipExplosion(entry.data.x, entry.data.z, 1.2);
+    this.scene.remove(entry.mesh);
+    this.pirates.delete(id);
+    this.hunterIds.delete(id);
+    this.npcDamageMarks.delete(id);
+    this.assistDecisions.delete(id);
+    this.assistingAllies.delete(id);
+    if (this.isEnemyInCombat(id)) {
+      this.combat.enemies = this.getCombatEnemies().filter((e) => e.id !== id);
+      this.syncCombatPrimaryFields();
+      this.pushNotification('Another captain sank your target!');
+    }
+  }
+
+  /**
+   * Called a couple of times per second: publishes every change the local player made to the shared
+   * world (bot ship gold/stock, defeated pirates, looted wrecks, settlement stock, ...) and applies stored
+   * state to entities the first time they are seen.
+   */
+  private syncSharedWorld(dt: number): void {
+    if (!this.net || !this.sharedReady) return;
+    this.sharedAccum += dt;
+    if (this.sharedAccum < 0.5) return;
+    this.sharedAccum = 0;
+    const seen = new Set<string>();
+
+    const track = <T extends object>(
+      kind: string,
+      id: string,
+      entity: T,
+      get: () => Record<string, unknown>,
+      apply: (data: Record<string, any>) => void
+    ) => {
+      const key = this.sharedKey(kind, id);
+      seen.add(key);
+      const tracked = this.sharedTracked.get(key);
+      if (!tracked || tracked.obj !== entity) {
+        const stored = this.sharedStore.get(key);
+        if (stored) apply(stored);
+        this.sharedTracked.set(key, { obj: entity, get, fp: JSON.stringify(get()) });
+        return;
+      }
+      tracked.get = get;
+      const data = get();
+      const fp = JSON.stringify(data);
+      if (fp !== tracked.fp) {
+        tracked.fp = fp;
+        this.sharedStore.set(key, { ...(this.sharedStore.get(key) ?? {}), ...data });
+        this.net!.sendPatch(kind, id, data);
+      }
+    };
+
+    for (const e of this.merchants.values()) {
+      const m = e.data;
+      track('merchant', m.id, m, () => ({
+        gold: m.gold, stock: m.stock, hull: Math.round(m.hull), crewCount: m.crewCount, cannons: m.cannons,
+        robbed: m.robbed, hostileToPlayer: m.hostileToPlayer, surrenderedToPlayer: m.surrenderedToPlayer,
+        recruited: Boolean(m.recruited), sunk: m.sunk, hireableCrewIds: m.hireableCrew.map((c) => c.id),
+      }), (d) => this.applyMerchantPatch(m, d));
+    }
+    for (const e of this.pirates.values()) {
+      const p = e.data;
+      if (p.playerId || p.defeated || p.id.startsWith('hunter_') || p.isBountyTarget) continue;
+      track('pirate', p.id, p, () => ({ hull: Math.round(p.hull), crewCount: p.crewCount, cannons: p.cannons }), (d) => this.applyPiratePatch(p, d));
+    }
+    for (const e of this.monsters.values()) {
+      const m = e.data;
+      track('monster', m.id, m, () => ({
+        hp: Math.round(m.hp), defeated: m.defeated, carcassHarvested: Boolean(m.carcassHarvested),
+        carcassRemainingFood: m.carcassRemainingFood ?? 0, carcassRemainingSalt: m.carcassRemainingSalt ?? 0,
+      }), (d) => this.applyMonsterPatch(m, d));
+    }
+    for (const e of this.wildlife.values()) {
+      const w = e.data;
+      if (w.domain !== 'ocean' && !w.islandId) continue;
+      track('wildlife', w.id, w, () => ({ dead: w.dead, harvested: Boolean(w.harvested) }), (d) => this.applyWildlifePatch(e, d));
+    }
+    for (const e of this.islandPirateGuards.values()) {
+      const g = e.data;
+      track('guard', g.id, g, () => ({ hp: Math.round(g.hp), dead: g.dead, looted: g.looted }), (d) => this.applyGuardPatch(e, d));
+    }
+    for (const isl of this.islands.values()) {
+      const st = isl.data.settlement;
+      if (!st) continue;
+      track('settlement', st.id, st, () => ({ gold: st.gold, stock: st.stock }), (d) => this.applySettlementPatch(st, d));
+    }
+    for (const e of this.wrecks.values()) {
+      const w = e.data;
+      if (w.id.startsWith('sunk_wreck_') || w.id.startsWith('ghost_wreck_')) continue;
+      track('wreck', w.id, w, () => ({ looted: w.fullyLooted, sections: this.saveData.searchedWreckSections[w.id] ?? [] }), (d) => this.applyWreckPatch(w, d));
+    }
+
+    // One-way id sets: once looted/defeated/collected, it is that way for everyone.
+    const publishNewIds = (kind: 'wreck' | 'crate' | 'pirate' | 'monster' | 'discovery', ids: Iterable<string>, data: Record<string, unknown>) => {
+      const published = this.sharedPublishedIds[kind];
+      for (const id of ids) {
+        if (published.has(id)) continue;
+        published.add(id);
+        const patchKind = kind === 'wreck' ? 'wreck' : kind;
+        this.sharedStore.set(this.sharedKey(patchKind, id), data);
+        this.net!.sendPatch(patchKind, id, data);
+      }
+    };
+    publishNewIds('wreck', this.lootedWreckIds, { looted: true });
+    publishNewIds('crate', this.collectedCrateIds, { collected: true });
+    publishNewIds('pirate', Array.from(this.defeatedPirateIds).filter((id) => !id.startsWith('pvp_')), { defeated: true });
+    publishNewIds('discovery', this.saveData.collectedDiscoveryIds ?? [], { collected: true });
+    // (defeated monsters are shared through the 'monster' state tracker above)
+
+    for (const key of Array.from(this.sharedTracked.keys())) {
+      if (!seen.has(key)) this.sharedTracked.delete(key);
     }
   }
 
@@ -1331,8 +1700,12 @@ export class OceanEngine {
 
   public getMultiplayerShipState(): Omit<RemotePlayerState, 'id' | 'name'> {
     const p = this.saveData.player;
+    const combatStats = computeAutoCombatStats(p.upgrades, p.crew, this.combat.command);
     return {
       shipName: p.shipName,
+      reputation: this.saveData.reputation,
+      hullPct: Math.round(clamp(p.condition.hull, 0, 100)),
+      cannons: Math.max(1, Math.round(combatStats.effectiveCannons || 4)),
       x: p.x,
       z: p.z,
       heading: p.heading,
@@ -1342,46 +1715,88 @@ export class OceanEngine {
     };
   }
 
+  // --- Other players: name tags, collisions, trade and PvP ---------------------------------------
+
+  private reputationStyle(reputation: number): { label: string; color: string } {
+    const rep = Math.round(reputation);
+    const color = rep >= 25 ? '#8fe3a8' : rep <= -25 ? '#ff8b7a' : '#ecd9a6';
+    return { label: `${getReputationTitle(rep)} (${rep > 0 ? '+' : ''}${rep})`, color };
+  }
+
+  private createRemotePlayerNameTag(shipName: string, reputation: number): { sprite: THREE.Sprite; texture: THREE.CanvasTexture } {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 150;
+    const ctx = canvas.getContext('2d');
+    const style = this.reputationStyle(reputation);
+    if (ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'rgba(5, 15, 24, 0.88)';
+      ctx.strokeStyle = 'rgba(229, 190, 115, 0.95)';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.roundRect(8, 8, 496, 134, 18);
+      ctx.fill();
+      ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff5df';
+      ctx.font = 'bold 46px Arial';
+      ctx.fillText(shipName, 256, 54, 470);
+      ctx.fillStyle = style.color;
+      ctx.font = 'bold 30px Arial';
+      ctx.fillText(`Reputation: ${style.label}`, 256, 108, 480);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(25, 7.3, 1);
+    return { sprite, texture };
+  }
+
+  private disposeRemoteView(view: RemotePlayerShipView): void {
+    this.scene.remove(view.built.root);
+    view.built.flagTexture.dispose();
+    view.built.sailTexture?.dispose();
+    view.nameTexture.dispose();
+    (view.nameTag.material as THREE.SpriteMaterial).dispose();
+  }
+
   public syncRemotePlayers(players: RemotePlayerState[]): void {
     const activeIds = new Set(players.map((player) => player.id));
     for (const [id, remote] of this.remotePlayers) {
       if (!activeIds.has(id)) {
-        this.scene.remove(remote.built.root);
-        remote.built.flagTexture.dispose();
-        remote.built.sailTexture?.dispose();
-        remote.nameTexture.dispose();
-        (remote.nameTag.material as THREE.SpriteMaterial).dispose();
+        this.disposeRemoteView(remote);
         this.remotePlayers.delete(id);
         this.remoteChunkStreams.delete(id);
+        this.removePvpStandIn(id);
       }
     }
 
     for (const player of players) {
       if (!player?.id || !Number.isFinite(player.x) || !Number.isFinite(player.z)) continue;
-      const safeName = String(player.name || 'Captain').replace(/[<>]/g, '').slice(0, 22);
-      const safeShipName = String(player.shipName || 'Unnamed Vessel').replace(/[<>]/g, '').slice(0, 22);
+      const safeShipName = String(player.shipName || player.name || 'Unnamed Vessel').replace(/[<>]/g, '').slice(0, 22);
       const hullTier = clamp(Math.round(Number(player.hullTier) || 1), 1, 7);
+      const reputation = Math.round(clamp(Number(player.reputation) || 0, -100, 100));
       let view = this.remotePlayers.get(player.id);
 
       if (!view || view.hullTier !== hullTier) {
-        if (view) {
-          this.scene.remove(view.built.root);
-          view.built.flagTexture.dispose();
-          view.built.sailTexture?.dispose();
-          view.nameTexture.dispose();
-          (view.nameTag.material as THREE.SpriteMaterial).dispose();
-        }
+        if (view) this.disposeRemoteView(view);
         const upgrades = { ...this.saveData.player.upgrades, hullTier };
         const built = buildPlayerShip(upgrades, [], this.saveData.customFlag, this.textures);
-        const nameTagResult = this.createRemotePlayerNameTag(safeName);
-        built.root.add(nameTagResult.sprite);
-        nameTagResult.sprite.position.set(0, Math.max(13, built.halfLength * 0.78), 0);
+        const tag = this.createRemotePlayerNameTag(safeShipName, reputation);
+        built.root.add(tag.sprite);
+        tag.sprite.position.set(0, Math.max(13, built.halfLength * 0.78), 0);
         this.scene.add(built.root);
         view = {
           id: player.id,
-          name: safeName,
+          name: safeShipName,
           shipName: safeShipName,
           hullTier,
+          reputation,
+          hullPct: Number(player.hullPct ?? 100),
+          cannons: Number(player.cannons ?? 4),
           x: player.x,
           z: player.z,
           heading: player.heading || 0,
@@ -1391,8 +1806,8 @@ export class OceanEngine {
           speed: player.speed || 0,
           landed: Boolean(player.landed),
           built,
-          nameTag: nameTagResult.sprite,
-          nameTexture: nameTagResult.texture,
+          nameTag: tag.sprite,
+          nameTexture: tag.texture,
         };
         this.remotePlayers.set(player.id, view);
       } else {
@@ -1401,23 +1816,24 @@ export class OceanEngine {
         view.targetHeading = player.heading || 0;
         view.speed = player.speed || 0;
         view.landed = Boolean(player.landed);
-        view.shipName = safeShipName;
-        if (view.name !== safeName) {
-          const replacement = this.createRemotePlayerNameTag(safeName);
+        view.hullPct = Number(player.hullPct ?? view.hullPct);
+        view.cannons = Number(player.cannons ?? view.cannons);
+        if (view.shipName !== safeShipName || view.reputation !== reputation) {
+          const replacement = this.createRemotePlayerNameTag(safeShipName, reputation);
           (view.nameTag.material as THREE.SpriteMaterial).dispose();
           view.nameTag.material = replacement.sprite.material;
           view.nameTexture.dispose();
           view.nameTexture = replacement.texture;
-          view.name = safeName;
+          view.name = safeShipName;
+          view.shipName = safeShipName;
+          view.reputation = reputation;
         }
       }
     }
 
-    // All clients load the same server-seeded chunks around every connected ship.
-    // Islands and the standard NPC pirate encounters therefore exist in the same
-    // places for everyone, not only around the local camera.
+    // Every client loads the same seeded chunks around every connected ship, so islands, rocks,
+    // wrecks and bot ships exist in the same places for everyone.
     for (const remote of this.remotePlayers.values()) {
-      // Only stream remote regions close enough to be visible from this player's sea area.
       if (Math.hypot(remote.targetX - this.saveData.player.x, remote.targetZ - this.saveData.player.z) > 1750) continue;
       const { cx, cz } = worldToChunk(remote.targetX, remote.targetZ);
       const chunkKeyForRemote = `${cx},${cz}`;
@@ -1434,6 +1850,7 @@ export class OceanEngine {
     }
   }
 
+  /** Crashing into another player's ship pushes you back and stops you (like SPACE); only fast hits hurt. */
   private resolvePredictedMultiplayerShipCollisions(): void {
     if (this.fps.active || this.remotePlayers.size === 0) return;
     const p = this.saveData.player;
@@ -1446,44 +1863,44 @@ export class OceanEngine {
       if (distance >= minimum) continue;
       const nx = distance > 0.001 ? dx / distance : 1;
       const nz = distance > 0.001 ? dz / distance : 0;
-      // Local prediction makes the impact immediate; the server resolves the
-      // final separation and sends the authoritative correction to both ships.
-      const correction = (minimum - distance + 0.35) * (remote.landed ? 1 : 0.55);
-      p.x += nx * correction;
-      p.z += nz * correction;
-      p.speed *= 0.72;
+      // Closing speed along the collision normal (our speed toward them + their speed toward us).
+      const myVx = -Math.sin(p.heading) * p.speed;
+      const myVz = -Math.cos(p.heading) * p.speed;
+      const thVx = -Math.sin(remote.targetHeading) * remote.speed;
+      const thVz = -Math.cos(remote.targetHeading) * remote.speed;
+      const closing = Math.max(0, -((myVx - thVx) * nx + (myVz - thVz) * nz));
+      const overlap = minimum - distance;
+      const push = overlap + 2.5 + Math.min(6, closing * 0.5);
+      p.x += nx * push;
+      p.z += nz * push;
+      p.speed = 0;
+      p.throttle = 0;
+      p.isStopping = true;
+      const cooldownKey = `player_${remote.id}`;
+      if (closing > 0.5 && !this.collisionCooldowns.has(cooldownKey)) {
+        this.collisionCooldowns.set(cooldownKey, 0.9);
+        const FAST = 9;
+        const damage = closing > FAST ? Math.round((closing - FAST) * 1.6 + 2) : 0;
+        this.sound.playImpactSplinter();
+        this.trauma = Math.min(1, this.trauma + (closing > FAST ? 0.35 : 0.12));
+        this.playerImpactRoll += (Math.random() < 0.5 ? -1 : 1) * (closing > FAST ? 0.2 : 0.07);
+        if (damage > 0) {
+          p.condition.hull = Math.max(0, p.condition.hull - damage);
+          p.condition.flooding = clamp(p.condition.flooding + damage * 0.2, 0, 100);
+          this.emitDamageNotification({
+            targetName: p.shipName || 'Your Ship',
+            attackerName: remote.shipName,
+            location: 'hull',
+            damage,
+            source: 'ram',
+            direction: 'taken',
+            critical: damage >= 12,
+            worldPos: { x: (p.x + remote.targetX) * 0.5, y: 2.2, z: (p.z + remote.targetZ) * 0.5 },
+          });
+          this.checkPermadeath(remote.shipName);
+        }
+      }
     }
-  }
-
-  private createRemotePlayerNameTag(name: string): { sprite: THREE.Sprite; texture: THREE.CanvasTexture } {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 128;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = 'rgba(5, 15, 24, 0.88)';
-      ctx.strokeStyle = 'rgba(229, 190, 115, 0.95)';
-      ctx.lineWidth = 5;
-      ctx.beginPath();
-      ctx.roundRect(8, 8, 496, 112, 18);
-      ctx.fill();
-      ctx.stroke();
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#e8bf73';
-      ctx.font = 'bold 23px Arial';
-      ctx.fillText('PLAYER', 256, 39);
-      ctx.fillStyle = '#fff5df';
-      ctx.font = 'bold 43px Arial';
-      ctx.fillText(name.toUpperCase(), 256, 83, 470);
-    }
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
-    const sprite = new THREE.Sprite(material);
-    sprite.scale.set(23, 5.75, 1);
-    return { sprite, texture };
   }
 
   private updateRemotePlayers(dt: number): void {
@@ -1517,6 +1934,306 @@ export class OceanEngine {
         actor.group.position.x = actor.baseX + Math.sin(t) * actor.patrolAmp;
         actor.group.position.z = actor.baseZ + Math.cos(t * 0.85) * actor.patrolAmp;
       }
+    }
+  }
+
+  public getRemotePlayerList(): Array<{ id: string; shipName: string; x: number; z: number; heading: number; reputation: number; landed: boolean }> {
+    return [...this.remotePlayers.values()].map((r) => ({
+      id: r.id, shipName: r.shipName, x: r.targetX, z: r.targetZ, heading: r.targetHeading, reputation: r.reputation, landed: r.landed,
+    }));
+  }
+
+  public findNearbyPlayer(): { id: string; name: string; reputation: number; distance: number } | null {
+    if (this.fps.active) return null;
+    const p = this.saveData.player;
+    let best: { id: string; name: string; reputation: number; distance: number } | null = null;
+    for (const r of this.remotePlayers.values()) {
+      if (r.landed) continue;
+      const d = Math.hypot(r.targetX - p.x, r.targetZ - p.z);
+      if (d < 110 && (!best || d < best.distance)) {
+        best = { id: r.id, name: r.shipName, reputation: r.reputation, distance: Math.round(d) };
+      }
+    }
+    return best;
+  }
+
+  // --- Player-to-player trade (the other player must accept) -------------------------------------
+
+  private tradeSideCheck(giveGold: number, giveRes: ResourceId | null, giveQty: number, getRes: ResourceId | null, getQty: number): string | null {
+    const p = this.saveData.player;
+    if (giveGold > p.gold) return `Not enough gold (${giveGold}g needed).`;
+    if (giveRes && (p.inventory[giveRes] || 0) < giveQty) return `Not enough ${RESOURCE_DEFS[giveRes]?.name ?? giveRes} in your hold.`;
+    if (getRes) {
+      const freed = giveRes ? (RESOURCE_DEFS[giveRes]?.weight ?? 1) * giveQty : 0;
+      const cap = getCargoCapacity(p.upgrades);
+      if (getCargoWeight(p.inventory) - freed + (RESOURCE_DEFS[getRes]?.weight ?? 1) * getQty > cap + 0.01) return 'Your cargo hold is too full for that trade.';
+    }
+    return null;
+  }
+
+  private applyTradeSide(giveGold: number, giveRes: ResourceId | null, giveQty: number, getGold: number, getRes: ResourceId | null, getQty: number): void {
+    const p = this.saveData.player;
+    p.gold = Math.max(0, p.gold - giveGold + getGold);
+    if (giveRes) p.inventory[giveRes] = Math.max(0, (p.inventory[giveRes] || 0) - giveQty);
+    if (getRes) p.inventory[getRes] = (p.inventory[getRes] || 0) + getQty;
+    this.saveData.stats.peakGold = Math.max(this.saveData.stats.peakGold, p.gold);
+    this.saveData.stats.tradesCompleted++;
+    this.sound.playCoinChime();
+    this.flushImmediateSave();
+    this.emitHud();
+  }
+
+  private cleanOffer(o: PlayerTradeOffer): PlayerTradeOffer {
+    const num = (v: unknown, max: number) => Math.max(0, Math.min(max, Math.floor(Number(v) || 0)));
+    const res = (v: unknown): ResourceId | null => (typeof v === 'string' && RESOURCE_DEFS[v as ResourceId] ? (v as ResourceId) : null);
+    const giveRes = res(o.giveRes);
+    const askRes = res(o.askRes);
+    return {
+      giveGold: num(o.giveGold, 1_000_000), giveRes, giveQty: giveRes ? num(o.giveQty, 10_000) : 0,
+      askGold: num(o.askGold, 1_000_000), askRes, askQty: askRes ? num(o.askQty, 10_000) : 0,
+    };
+  }
+
+  public proposeTrade(toId: string, offerIn: PlayerTradeOffer): { ok: boolean; message: string } {
+    if (!this.net) return { ok: false, message: 'Not connected to the shared ocean.' };
+    const offer = this.cleanOffer(offerIn);
+    if (offer.giveGold + offer.giveQty + offer.askGold + offer.askQty <= 0) return { ok: false, message: 'Offer something first.' };
+    const err = this.tradeSideCheck(offer.giveGold, offer.giveRes, offer.giveQty, offer.askRes, offer.askQty);
+    if (err) return { ok: false, message: err };
+    const offerId = `${this.myPlayerId.slice(0, 6)}_${Date.now()}`;
+    this.pendingOutgoingTrades.set(offerId, { to: toId, offer });
+    const sent = this.net.sendRelay('trade-offer', toId, { offerId, offer });
+    if (!sent) return { ok: false, message: 'Could not reach the server.' };
+    const name = this.remotePlayers.get(toId)?.shipName ?? 'the other captain';
+    this.pushNotification(`Trade offer sent to ${name}. Waiting for them to accept…`);
+    window.setTimeout(() => this.pendingOutgoingTrades.delete(offerId), 60_000);
+    return { ok: true, message: 'Offer sent.' };
+  }
+
+  public respondToTrade(offerId: string, accept: boolean): { ok: boolean; message: string } {
+    const inc = this.pendingIncomingTrades.get(offerId);
+    if (!inc || !this.net) return { ok: false, message: 'That offer expired.' };
+    if (!accept) {
+      this.net.sendRelay('trade-response', inc.from, { offerId, accept: false });
+      this.pendingIncomingTrades.delete(offerId);
+      return { ok: true, message: 'Offer declined.' };
+    }
+    // I give what they ask for, and receive what they give.
+    const o = inc.offer;
+    const err = this.tradeSideCheck(o.askGold, o.askRes, o.askQty, o.giveRes, o.giveQty);
+    if (err) {
+      this.net.sendRelay('trade-response', inc.from, { offerId, accept: false, reason: err });
+      this.pendingIncomingTrades.delete(offerId);
+      return { ok: false, message: err };
+    }
+    this.net.sendRelay('trade-response', inc.from, { offerId, accept: true });
+    this.pushNotification('Offer accepted — waiting for the other captain to complete the trade…');
+    return { ok: true, message: 'Accepted.' };
+  }
+
+  // --- PvP: fight another player like any pirate, but they steer the other ship ------------------
+
+  private ensurePvpStandIn(playerId: string): { data: PirateShipData; mesh: THREE.Group; cannonRecoil: number } | null {
+    const id = `pvp_${playerId}`;
+    const existing = this.pirates.get(id);
+    if (existing) return existing;
+    const view = this.remotePlayers.get(playerId);
+    if (!view) return null;
+    const base = generatePirateShip(id, view.targetX, view.targetZ, 'sloop', this.rand);
+    base.playerId = playerId;
+    base.name = view.shipName;
+    base.captainName = view.shipName;
+    base.cannons = Math.max(2, Math.round(view.cannons || 4));
+    base.maxHull = 100;
+    base.hull = Math.max(1, view.hullPct || 100);
+    base.crewCount = Math.max(6, base.crewCount);
+    base.behavior = 'broadside';
+    base.hailCooldown = 99999;
+    base.defeated = false;
+    base.heading = view.targetHeading;
+    const built = buildNpcShip(base.hullArchetype, 'pirate', this.textures, base.factionId, Math.min(14, base.cannons));
+    built.root.position.set(base.x, 0, base.z);
+    built.root.visible = false; // the real player ship is drawn by the remote-player view
+    this.scene.add(built.root);
+    const entry = {
+      data: base, mesh: built.root, sails: built.sails, flagMesh: built.flagMesh,
+      ghostFog: built.ghostFog, fadeMaterials: built.fadeMaterials, cannonGroups: built.cannonGroups,
+      damagePatches: built.damagePatches, crewActors: built.crewActors, halfLength: built.halfLength,
+      halfBeam: built.halfBeam, cannonRecoil: 0, impactRoll: 0, impactPitch: 0, smokeAccum: 0,
+    };
+    this.pirates.set(id, entry);
+    return entry;
+  }
+
+  private removePvpStandIn(playerId: string): void {
+    const id = `pvp_${playerId}`;
+    const entry = this.pirates.get(id);
+    this.pvpOpponents.delete(playerId);
+    if (!entry) return;
+    this.scene.remove(entry.mesh);
+    this.pirates.delete(id);
+    this.npcDamageMarks.delete(id);
+    if (this.isEnemyInCombat(id)) {
+      this.combat.enemies = this.getCombatEnemies().filter((e) => e.id !== id);
+      this.syncCombatPrimaryFields();
+    }
+  }
+
+  /** Keeps a PvP stand-in glued to the real player's ship. Returns false if the fight is over. */
+  private stepPvpStandIn(entry: { data: PirateShipData }, dt: number): void {
+    const pir = entry.data;
+    const view = pir.playerId ? this.remotePlayers.get(pir.playerId) : undefined;
+    if (!view || view.landed) {
+      if (pir.playerId) {
+        this.pushNotification(`${pir.name} slipped away.`);
+        this.removePvpStandIn(pir.playerId);
+      }
+      return;
+    }
+    const blend = 1 - Math.exp(-Math.max(0.001, dt) * 9);
+    pir.x += (view.targetX - pir.x) * blend;
+    pir.z += (view.targetZ - pir.z) * blend;
+    pir.heading = normalizeAngle(pir.heading + normalizeAngle(view.targetHeading - pir.heading) * blend);
+    pir.speed = view.speed;
+    pir.hull = Math.max(1, view.hullPct);
+    pir.cannons = Math.max(2, Math.round(view.cannons || pir.cannons));
+    pir.behavior = 'broadside';
+    const dist = Math.hypot(pir.x - this.saveData.player.x, pir.z - this.saveData.player.z);
+    if (dist > 330) {
+      const id = pir.playerId!;
+      this.net?.sendRelay('pvp-end', id, {});
+      this.pushNotification(`You broke away from ${pir.name}.`);
+      this.removePvpStandIn(id);
+    }
+  }
+
+  public attackPlayer(playerId: string): { ok: boolean; message: string } {
+    const view = this.remotePlayers.get(playerId);
+    if (!view || !this.net) return { ok: false, message: 'That ship is gone.' };
+    if (view.landed) return { ok: false, message: 'That captain is ashore.' };
+    if (Math.hypot(view.targetX - this.saveData.player.x, view.targetZ - this.saveData.player.z) > 330) {
+      return { ok: false, message: 'Too far away to attack.' };
+    }
+    const entry = this.ensurePvpStandIn(playerId);
+    if (!entry) return { ok: false, message: 'Could not engage that ship.' };
+    this.pvpOpponents.add(playerId);
+    this.net.sendRelay('pvp-attack', playerId, { cannons: this.saveData.player.upgrades.cannonCount ?? 4 });
+    this.startNavalBattle(entry.data);
+    return { ok: true, message: `You attacked ${view.shipName}! Fight!` };
+  }
+
+  private notifyPvpDown(lostGold: number): void {
+    for (const id of Array.from(this.pvpOpponents)) {
+      this.net?.sendRelay('pvp-down', id, { goldLost: lostGold });
+      this.removePvpStandIn(id);
+    }
+  }
+
+  /** Messages from other players (relayed by the server). */
+  public handleRelay(type: RelayType, from: string, fromName: string, payload: any): void {
+    switch (type) {
+      case 'trade-offer': {
+        const offer = this.cleanOffer(payload?.offer ?? {});
+        const offerId = String(payload?.offerId ?? '');
+        if (!offerId) return;
+        this.pendingIncomingTrades.set(offerId, { from, fromName, offer });
+        window.setTimeout(() => this.pendingIncomingTrades.delete(offerId), 60_000);
+        this.sound.playShipBell();
+        this.callbacks.onIncomingTradeOffer?.({ offerId, from, fromName, offer });
+        return;
+      }
+      case 'trade-response': {
+        const out = this.pendingOutgoingTrades.get(String(payload?.offerId ?? ''));
+        if (!out || out.to !== from) return;
+        if (!payload.accept) {
+          this.pendingOutgoingTrades.delete(String(payload.offerId));
+          this.pushNotification(payload.reason ? `${fromName} could not trade: ${payload.reason}` : `${fromName} declined your trade offer.`);
+          return;
+        }
+        const o = out.offer;
+        const err = this.tradeSideCheck(o.giveGold, o.giveRes, o.giveQty, o.askRes, o.askQty);
+        this.pendingOutgoingTrades.delete(String(payload.offerId));
+        if (err) {
+          this.net?.sendRelay('trade-commit', from, { offerId: payload.offerId, ok: false });
+          this.pushNotification(`Trade with ${fromName} failed: ${err}`);
+          return;
+        }
+        this.applyTradeSide(o.giveGold, o.giveRes, o.giveQty, o.askGold, o.askRes, o.askQty);
+        this.net?.sendRelay('trade-commit', from, { offerId: payload.offerId, ok: true });
+        this.addLog('Player Trade', `Traded with ${fromName}.`);
+        this.pushNotification(`Trade with ${fromName} completed!`);
+        return;
+      }
+      case 'trade-commit': {
+        const offerId = String(payload?.offerId ?? '');
+        const inc = this.pendingIncomingTrades.get(offerId);
+        if (!inc || inc.from !== from) return;
+        this.pendingIncomingTrades.delete(offerId);
+        if (!payload.ok) {
+          this.pushNotification(`${fromName} could not complete the trade.`);
+          return;
+        }
+        const o = inc.offer;
+        const err = this.tradeSideCheck(o.askGold, o.askRes, o.askQty, o.giveRes, o.giveQty);
+        if (err) {
+          this.pushNotification(`Trade with ${fromName} failed: ${err}`);
+          return;
+        }
+        this.applyTradeSide(o.askGold, o.askRes, o.askQty, o.giveGold, o.giveRes, o.giveQty);
+        this.addLog('Player Trade', `Traded with ${fromName}.`);
+        this.pushNotification(`Trade with ${fromName} completed!`);
+        return;
+      }
+      case 'trade-cancel': {
+        this.pendingIncomingTrades.delete(String(payload?.offerId ?? ''));
+        return;
+      }
+      case 'pvp-attack': {
+        const entry = this.ensurePvpStandIn(from);
+        if (!entry) return;
+        this.pvpOpponents.add(from);
+        this.startNavalBattle(entry.data);
+        this.pushNotification(`${fromName} is attacking you!`);
+        return;
+      }
+      case 'pvp-volley': {
+        if (!this.pvpOpponents.has(from) || this.playerSinkingTimer > 0) return;
+        const entry = this.ensurePvpStandIn(from);
+        if (!entry) return;
+        const pirate = entry.data;
+        const dist = Math.hypot(pirate.x - this.saveData.player.x, pirate.z - this.saveData.player.z);
+        if (dist > 420) return;
+        const stats = computeAutoCombatStats(this.saveData.player.upgrades, this.saveData.player.crew, this.combat.command);
+        const res = resolveEnemyVolley(
+          pirate, dist, this.saveData.player.condition, this.saveData.player.upgrades,
+          this.saveData.player.crew, this.rand, stats.damageTakenMult
+        );
+        this.applyIncomingVolleyEffects(pirate.name, pirate.x, entry.mesh.position.y, pirate.z, pirate.cannons, res);
+        entry.cannonRecoil = 1.0;
+        return;
+      }
+      case 'pvp-down': {
+        if (!this.pvpOpponents.has(from)) return;
+        const loot = Math.min(400, Math.round((Number(payload?.goldLost) || 0) * 0.5));
+        this.saveData.player.gold += loot;
+        this.saveData.stats.peakGold = Math.max(this.saveData.stats.peakGold, this.saveData.player.gold);
+        this.removePvpStandIn(from);
+        this.sound.playCoinChime();
+        this.addLog('Player Vessel Sunk', `You sank ${fromName} and plundered ${loot} gold.`);
+        this.pushNotification(`You sank ${fromName}! Plundered ${loot} gold.`);
+        this.flushImmediateSave();
+        this.emitHud();
+        return;
+      }
+      case 'pvp-end': {
+        if (this.pvpOpponents.has(from)) {
+          this.removePvpStandIn(from);
+          this.pushNotification(`${fromName} broke off the fight.`);
+        }
+        return;
+      }
+      default:
+        return;
     }
   }
 
@@ -1806,14 +2523,14 @@ export class OceanEngine {
       }
     }
 
-    if (!skipPrune && this.remotePlayers.size === 0) {
+    if (!skipPrune) {
     const px = this.saveData.player.x;
     const pz = this.saveData.player.z;
 
     for (const [id, entry] of this.wrecks) {
       const isDynamic = id.startsWith('sunk_wreck_') || id.startsWith('ghost_wreck_');
       const pruneDist = isDynamic && !entry.data.fullyLooted ? 2200 : 960;
-      if (Math.hypot(entry.data.x - px, entry.data.z - pz) > pruneDist) {
+      if (this.distToNearestPlayer(entry.data.x, entry.data.z) > pruneDist) {
         this.scene.remove(entry.mesh);
         this.wrecks.delete(id);
         if (entry.data.spawnedFromShipId) {
@@ -1822,52 +2539,52 @@ export class OceanEngine {
       }
     }
     for (const [id, entry] of this.crates) {
-      if (Math.hypot(entry.data.x - px, entry.data.z - pz) > 960) {
+      if (this.distToNearestPlayer(entry.data.x, entry.data.z) > 960) {
         this.scene.remove(entry.mesh);
         this.crates.delete(id);
       }
     }
     for (const [id, entry] of this.rocks) {
-      if (Math.hypot(entry.data.x - px, entry.data.z - pz) > 960) {
+      if (this.distToNearestPlayer(entry.data.x, entry.data.z) > 960) {
         this.scene.remove(entry.mesh);
         this.rocks.delete(id);
       }
     }
     for (const [id, entry] of this.islands) {
       if (this.fps.active && this.fps.island?.id === id) continue;
-      if (Math.hypot(entry.data.x - px, entry.data.z - pz) > 1080) {
+      if (this.distToNearestPlayer(entry.data.x, entry.data.z) > 1080) {
         this.scene.remove(entry.built.root);
         this.islands.delete(id);
       }
     }
     for (const [id, entry] of this.icebergs) {
-      if (Math.hypot(entry.data.x - px, entry.data.z - pz) > 1020) {
+      if (this.distToNearestPlayer(entry.data.x, entry.data.z) > 1020) {
         this.scene.remove(entry.mesh);
         this.icebergs.delete(id);
       }
     }
     for (const [id, entry] of this.iceChunks) {
-      if (Math.hypot(entry.data.x - px, entry.data.z - pz) > 980) {
+      if (this.distToNearestPlayer(entry.data.x, entry.data.z) > 980) {
         this.scene.remove(entry.mesh);
         this.iceChunks.delete(id);
       }
     }
     for (const [id, entry] of this.iceSheets) {
-      if (Math.hypot(entry.data.x - px, entry.data.z - pz) > 980) {
+      if (this.distToNearestPlayer(entry.data.x, entry.data.z) > 980) {
         this.scene.remove(entry.built.root);
         this.iceSheets.delete(id);
       }
     }
     for (const [id, entry] of this.wildlife) {
       if (entry.data.islandId && this.fps.active && this.fps.island?.id === entry.data.islandId) continue;
-      if (Math.hypot(entry.data.x - px, entry.data.z - pz) > 1020) {
+      if (this.distToNearestPlayer(entry.data.x, entry.data.z) > 1020) {
         this.scene.remove(entry.built.root);
         this.wildlife.delete(id);
       }
     }
     for (const [id, entry] of this.islandPirateGuards) {
       if (this.fps.active && this.fps.island?.id === entry.data.islandId) continue;
-      if (!this.islands.has(entry.data.islandId) || Math.hypot(entry.data.x - px, entry.data.z - pz) > 1060) {
+      if (!this.islands.has(entry.data.islandId) || this.distToNearestPlayer(entry.data.x, entry.data.z) > 1060) {
         this.scene.remove(entry.built.root);
         this.islandPirateGuards.delete(id);
       }
@@ -1880,7 +2597,7 @@ export class OceanEngine {
       if (
         id !== this.combat.hostileMerchantId &&
         !this.isEnemyInCombat(id) &&
-        Math.hypot(entry.data.x - px, entry.data.z - pz) > maxD
+        this.distToNearestPlayer(entry.data.x, entry.data.z) > maxD
       ) {
         this.scene.remove(entry.mesh);
         this.merchants.delete(id);
@@ -1897,7 +2614,7 @@ export class OceanEngine {
       if (
         id !== this.combat.pirateId &&
         !this.isEnemyInCombat(id) &&
-        Math.hypot(entry.data.x - px, entry.data.z - pz) > maxD
+        this.distToNearestPlayer(entry.data.x, entry.data.z) > maxD
       ) {
         this.scene.remove(entry.mesh);
         this.pirates.delete(id);
@@ -1911,7 +2628,7 @@ export class OceanEngine {
       if (
         id !== this.combat.monsterId &&
         !this.isEnemyInCombat(id) &&
-        Math.hypot(entry.data.x - px, entry.data.z - pz) > 1060
+        this.distToNearestPlayer(entry.data.x, entry.data.z) > 1060
       ) {
         this.scene.remove(entry.built.root);
         this.monsters.delete(id);
@@ -3172,6 +3889,25 @@ export class OceanEngine {
     return { ok: true, message: msg };
   }
 
+  /** Charges the gold fee for casting the rod. Called before every cast. */
+  public payFishingCastFee(target: { kind: 'sea_wildlife' | 'monster_carcass'; id: string } | null): { ok: boolean; cost: number; message: string } {
+    let tier: number | null = null;
+    if (target?.kind === 'monster_carcass') {
+      const m = this.monsters.get(target.id);
+      tier = MONSTER_FISH_TIER[m?.data.size ?? 'medium'] ?? 5;
+    } else if (target?.kind === 'sea_wildlife') {
+      const w = this.wildlife.get(target.id);
+      tier = WILDLIFE_FISH_TIER[w?.data.species ?? ''] ?? 2;
+    }
+    const cost = getFishingCastCost(tier);
+    if (this.saveData.player.gold < cost) {
+      return { ok: false, cost, message: `You need ${cost} gold to bait and cast the rod.` };
+    }
+    this.saveData.player.gold -= cost;
+    this.emitHud();
+    return { ok: true, cost, message: `Paid ${cost}g to cast.` };
+  }
+
   public completeManualFishingCatch(spec: FishingCatchSpec): { ok: boolean; message: string } {
     if (this.currentBiome === 'deep') {
       return {
@@ -3434,6 +4170,16 @@ export class OceanEngine {
       this.saveData.discoveredIslandIds.push(isl.id);
     }
     isl.discovered = true;
+    if (isl.controller === 'tribe' && (isl.pirateGuards?.length ?? 0) > 0) {
+      const st = this.saveData.tribeStanding?.[isl.id];
+      this.pushNotification(
+        st === 'allied'
+          ? `The ${isl.tribeName ?? 'tribe'} of ${isl.name} greet you as friends.`
+          : st === 'hostile'
+            ? `The ${isl.tribeName ?? 'tribe'} of ${isl.name} remember you and are hostile!`
+            : `The ${isl.tribeName ?? 'tribe'} hold ${isl.name} and guard their sacred cache. Approach and press [E] to ally, or attack.`
+      );
+    }
     this.recordMarker({
       id: isl.id,
       kind: 'island',
@@ -3550,6 +4296,7 @@ export class OceanEngine {
       }
     } else if (res.hitGuard) {
       if (res.weapon === 'cutlass') this.sound.playCutlassHit();
+      this.provokeIslandGuards(res.hitGuard);
       const gRes = damageIslandPirateGuard(res.hitGuard, res.damage);
       this.worldDamagePopups.push({
         id: `wdmg_${++this.damageBannerSeq}`,
@@ -3557,7 +4304,7 @@ export class OceanEngine {
         worldY: res.hitGuard.y + 1.6,
         worldZ: res.hitGuard.z,
         amount: res.damage,
-        partLabel: res.hitGuard.role === 'pistol' ? 'CORSAIR' : 'BUCCANEER',
+        partLabel: res.hitGuard.tribal ? (res.hitGuard.role === 'pistol' ? 'BOWMAN' : 'SPEARMAN') : res.hitGuard.role === 'pistol' ? 'CORSAIR' : 'BUCCANEER',
         targetName: res.hitGuard.name,
         source: 'cannon',
         direction: 'dealt',
@@ -3570,12 +4317,80 @@ export class OceanEngine {
           (g) => g.chestId === res.hitGuard!.chestId && !g.dead
         ).length;
         if (remaining <= 0) {
-          this.fps.setStatus(`Defeated ${res.hitGuard.name}! Pirate Chest unlocked — press [E] to loot.`);
+          this.fps.setStatus(`Defeated ${res.hitGuard.name}! ${res.hitGuard.tribal ? 'Sacred cache' : 'Pirate chest'} unlocked — press [E] to loot.`);
         } else {
-          this.fps.setStatus(`Defeated ${res.hitGuard.name}! ${remaining} pirate guard(s) remain.`);
+          this.fps.setStatus(`Defeated ${res.hitGuard.name}! ${remaining} guard(s) remain.`);
         }
       }
     }
+    this.emitHud();
+  }
+
+  /** Attacking a guard turns the whole island's guards hostile toward this player. */
+  private provokeIslandGuards(guard: IslandPirateGuardData): void {
+    const attitude = getGuardAttitude(guard, this.saveData);
+    if (attitude === 'hostile') return;
+    if (guard.tribal) {
+      if (!this.saveData.tribeStanding) this.saveData.tribeStanding = {};
+      const wasAllied = this.saveData.tribeStanding[guard.islandId] === 'allied';
+      this.saveData.tribeStanding[guard.islandId] = 'hostile';
+      this.shiftReputation(wasAllied ? -14 : -6);
+      const tribe = this.fps.island?.tribeName ?? 'tribe';
+      this.pushNotification(wasAllied ? `You betrayed the ${tribe}! They attack!` : `The ${tribe} rally against you!`);
+    } else {
+      if (!this.saveData.islandProvoked) this.saveData.islandProvoked = [];
+      if (!this.saveData.islandProvoked.includes(guard.islandId)) this.saveData.islandProvoked.push(guard.islandId);
+      this.pushNotification('You betrayed the pirates guarding this island — they attack!');
+    }
+    this.flushImmediateSave();
+  }
+
+  /** [E] on a non-hostile guard: ally with a wary tribe, or take a friendly share of the treasure. */
+  private parleyWithGuard(guard: IslandPirateGuardData): void {
+    const isl = this.fps.island;
+    if (!isl) return;
+    const attitude = getGuardAttitude(guard, this.saveData);
+    if (attitude === 'hostile') return;
+
+    if (guard.tribal && attitude === 'wary') {
+      const giftCost = 20;
+      if (this.saveData.player.gold < giftCost) {
+        this.fps.setStatus(`The ${isl.tribeName ?? 'tribe'} expect a gift of ${giftCost} gold.`);
+        this.pushNotification(`You need ${giftCost} gold as a gift to ally with the ${isl.tribeName ?? 'tribe'}.`);
+        this.emitHud();
+        return;
+      }
+      this.saveData.player.gold -= giftCost;
+      if (!this.saveData.tribeStanding) this.saveData.tribeStanding = {};
+      this.saveData.tribeStanding[isl.id] = 'allied';
+      this.shiftReputation(10);
+      this.grantLoot(0, { food: 14, salt: 2 });
+      this.sound.playCoinChime();
+      this.pushNotification(`The ${isl.tribeName ?? 'tribe'} welcome you as an ally! +10 Reputation, and they share provisions.`);
+      this.addLog('Tribal Alliance', `Allied with the ${isl.tribeName ?? 'tribe'} of ${isl.name} with a gift of ${giftCost} gold.`);
+      this.fps.setStatus(`Allied with the ${isl.tribeName ?? 'tribe'}.`);
+      this.flushImmediateSave();
+      this.emitHud();
+      return;
+    }
+
+    // Friendly guards (allied tribe, or pirates that favour you) share part of the cache once per island.
+    if (!this.saveData.treasureSharesTaken) this.saveData.treasureSharesTaken = [];
+    const chest = isl.discoveries.find((d) => d.id === guard.chestId);
+    if (!chest || chest.collected || this.saveData.treasureSharesTaken.includes(isl.id)) {
+      this.fps.setStatus(guard.tribal ? 'The tribe nods in respect.' : `${guard.name} grins and tips his hat.`);
+      this.emitHud();
+      return;
+    }
+    const share = Math.max(10, Math.round(chest.gold * 0.4));
+    this.saveData.treasureSharesTaken.push(isl.id);
+    this.saveData.player.gold += share;
+    this.saveData.stats.peakGold = Math.max(this.saveData.stats.peakGold, this.saveData.player.gold);
+    if (!guard.tribal) this.shiftReputation(-1);
+    this.sound.playCoinChime();
+    this.pushNotification(guard.tribal ? `The ${isl.tribeName ?? 'tribe'} share ${share} gold of treasure with you.` : `The pirates split the loot with you: +${share} gold.`);
+    this.fps.setStatus(`Received a ${share}-gold share of the treasure.`);
+    this.flushImmediateSave();
     this.emitHud();
   }
 
@@ -3672,6 +4487,11 @@ export class OceanEngine {
       }
       return;
     }
+    if (cand.kind === 'parley_guard') {
+      const gEntry = this.islandPirateGuards.get(cand.id);
+      if (gEntry) this.parleyWithGuard(gEntry.data);
+      return;
+    }
     if (cand.kind === 'loot_pirate') {
       const gEntry = this.islandPirateGuards.get(cand.id);
       if (gEntry && gEntry.data.dead && !gEntry.data.looted) {
@@ -3680,7 +4500,7 @@ export class OceanEngine {
           gEntry.built.root.visible = false;
           this.sound.playCoinChime();
           this.pushNotification(
-            `Looted ${gEntry.data.name}: +${lRes.goldAdded} gold, +${lRes.gunpowderAdded} powder & +${lRes.leadShotAdded} shot!`
+            gEntry.data.tribal ? `Looted ${gEntry.data.name}: +${lRes.goldAdded} gold in tribal tokens.` : `Looted ${gEntry.data.name}: +${lRes.goldAdded} gold, +${lRes.gunpowderAdded} powder & +${lRes.leadShotAdded} shot!`
           );
           this.flushImmediateSave();
           this.emitHud();
@@ -4364,6 +5184,7 @@ export class OceanEngine {
         stats.effectiveCannons
       );
       if (!res.fired) return;
+      if (pirate.playerId) this.net?.sendRelay('pvp-volley', pirate.playerId, {});
 
       this.consumeAmmoAndSpawnSalvo(
         res,
@@ -4411,7 +5232,10 @@ export class OceanEngine {
           worldPos: { x: pirate.x, y: entry.mesh.position.y + 2.4, z: pirate.z },
         });
       }
-      if (res.enemyDefeated) {
+      if (pirate.playerId) {
+        // The other captain's real hull is theirs to lose; their client resolves the volley.
+        pirate.hull = Math.max(1, pirate.hull);
+      } else if (res.enemyDefeated) {
         this.handlePirateDefeated(pirate);
       }
     }
@@ -4844,7 +5668,7 @@ export class OceanEngine {
     this.shiftReputation(mon.alignment === 'evil' ? 10 : mon.alignment === 'good' ? -8 : 2);
     this.sound.playSplashHuge();
     this.pushNotification(
-      `Slain ${mon.name}! Its body floats at the surface — fish near the carcass [E]/[F] for +${provisionDrop} Provisions & +${saltDrop} Salt!`
+      `Slain ${mon.name}! Its body floats at the surface — press [F] near the carcass to fish it for +${provisionDrop} Provisions & +${saltDrop} Salt!`
     );
     this.addLog(
       `Slain ${mon.name}`,
@@ -5203,7 +6027,8 @@ export class OceanEngine {
               this.fps.pos.x,
               this.fps.pos.z,
               this.fps.weapons.isBlocking,
-              dt
+              dt,
+              getGuardAttitude(guard, this.saveData) === 'hostile'
             );
             guard.y = Math.max(0.25, sampleIslandTerrainHeight(this.fps.island, guard.x, guard.z));
             const totalGuardDmg = gStep.meleeDamage + gStep.rangedShotDamage;
@@ -5237,6 +6062,7 @@ export class OceanEngine {
     }
     this.updatePlayerPhysics(dt, oceanActive);
     this.updateEntities(dt, activeSim && this.playerSinkingTimer <= 0);
+    this.syncSharedWorld(dt);
     if (oceanActive) {
       this.updateUnifiedPlayerCombat(dt);
       this.resolveAllCollisions(dt);
@@ -6017,6 +6843,8 @@ export class OceanEngine {
     // 3. Civilian, Merchant Convoy & Crown Navy Ships
     for (const [mId, entry] of Array.from(this.merchants.entries())) {
       const m = entry.data;
+      const remoteMerchant = this.getRemoteNpc(mId);
+      if (remoteMerchant && !m.sunk) this.driveRemoteNpc(m, remoteMerchant, dt);
       animateWavingFlag(entry.flagMesh, this.simTime, w.windSpeed / 12);
       const distPlayer = Math.hypot(m.x - px, m.z - pz);
       if (!m.sunk && distPlayer < 460) {
@@ -6028,7 +6856,7 @@ export class OceanEngine {
         this.animateDamageMarksOnRoot(mMarks, m.x, m.z, emitWreckFireNow && distPlayer < 260);
       }
 
-      if (oceanSim && !m.sunk) {
+      if (oceanSim && !m.sunk && !remoteMerchant) {
         if (m.fleeTimer > 0) {
           m.fleeTimer -= dt;
           if (m.fleeTimer <= 0) m.fleeingFromPlayer = false;
@@ -6508,6 +7336,16 @@ export class OceanEngine {
 
     for (const [pirId, entry] of Array.from(this.pirates.entries())) {
       const pir = entry.data;
+      if (pir.playerId) {
+        // Another human's ship: never AI-driven; this stand-in just follows them for PvP combat.
+        this.stepPvpStandIn(entry, dt);
+        if (!this.pirates.has(pirId)) continue;
+      }
+      const remotePirate = pir.playerId ? null : this.getRemoteNpc(pirId);
+      if (remotePirate && !pir.defeated) {
+        this.driveRemoteNpc(pir, remotePirate, dt);
+        if (remotePirate.behavior) pir.behavior = remotePirate.behavior as typeof pir.behavior;
+      }
       const inCombatWithThis = this.isEnemyInCombat(pir.id);
       animateWavingFlag(entry.flagMesh, this.simTime, w.windSpeed / 12);
       const dist = Math.hypot(pir.x - px, pir.z - pz);
@@ -6520,7 +7358,29 @@ export class OceanEngine {
         this.animateDamageMarksOnRoot(pMarks, pir.x, pir.z, emitWreckFireNow && dist < 260);
       }
 
-      if (pirateSim && !pir.defeated) {
+      if (remotePirate && pirateSim && !pir.defeated) {
+        // Another player simulates this pirate's movement. Whoever it is hunting still has to be able to
+        // fight it: hail/engage and return fire are resolved here, on the targeted player's own client.
+        if (pir.hailCooldown > 0) pir.hailCooldown = Math.max(0, pir.hailCooldown - dt);
+        if (pir.behavior === 'hailing' && pir.hailCooldown <= 0 && !this.modalOpen && !inCombatWithThis && dist < 200 && !this.fps.active) {
+          pir.hailCooldown = 14;
+          this.startNavalBattle(pir);
+        }
+        if (inCombatWithThis && pir.cannons > 0 && pir.behavior !== 'retreat') {
+          pir.reloadTimer -= dt;
+          if (pir.reloadTimer <= 0) {
+            pir.reloadTimer = pir.reloadTime * (0.9 + this.rand() * 0.25);
+            this.executePirateVolley(pir, entry, dist);
+          }
+        }
+        if (inCombatWithThis && dist > 300) {
+          this.combat.enemies = this.getCombatEnemies().filter((e) => e.id !== pir.id);
+          this.syncCombatPrimaryFields();
+          pir.hailCooldown = 65;
+        }
+      }
+
+      if (pirateSim && !pir.defeated && !pir.playerId && !remotePirate) {
         if (pir.hailCooldown > 0) pir.hailCooldown = Math.max(0, pir.hailCooldown - dt);
         if ((pir.ramCooldown ?? 0) > 0) pir.ramCooldown = Math.max(0, (pir.ramCooldown ?? 0) - dt);
         if ((pir.ramCommitTimer ?? 0) > 0) {
@@ -7207,6 +8067,8 @@ export class OceanEngine {
     // 5. Sea Monsters
     for (const [mId, mEntry] of Array.from(this.monsters.entries())) {
       const mon = mEntry.data;
+      const remoteMonster = this.getRemoteNpc(mId);
+      if (remoteMonster && !mon.defeated) this.driveRemoteNpc(mon, remoteMonster, dt);
       const inCombatWithMon = this.isEnemyInCombat(mon.id);
       const attackStyle = mon.attackStyle ?? getMonsterAttackStyle(mon.species);
       if (oceanSim) {
@@ -7216,7 +8078,21 @@ export class OceanEngine {
         mon.animPhase += dt * (mon.size === 'small' ? 2.8 : 2.1);
       }
 
-      if (oceanSim && !mon.defeated) {
+      if (oceanSim && !mon.defeated && remoteMonster) {
+        // Movement comes from the owning player; a creature near US still attacks US.
+        const distPlayer = Math.hypot(mon.x - px, mon.z - pz);
+        if (mon.attackCooldown > 0) mon.attackCooldown -= dt;
+        if (
+          distPlayer <= mon.attackRange &&
+          mon.attackCooldown <= 0 &&
+          (inCombatWithMon || shouldMonsterAttackPlayer(mon, this.saveData.reputation))
+        ) {
+          mon.attackCooldown = 4.6 + this.rand() * 1.4;
+          this.executeMonsterStrike(mon, 1.0);
+        }
+      }
+
+      if (oceanSim && !mon.defeated && !remoteMonster) {
         const distPlayer = Math.hypot(mon.x - px, mon.z - pz);
         if (!mon.discovered && distPlayer < discoverRange * 1.25) {
           mon.discovered = true;
@@ -8006,6 +8882,27 @@ export class OceanEngine {
     this.emitHud();
   }
 
+  /**
+   * Crashes push the ship back off the obstacle and bring it to a halt (same effect as pressing SPACE),
+   * so slow bumps cost almost nothing; only hitting something at real speed does real damage.
+   */
+  private softenPlayerCollision(res: { impactSpeed: number; damageA: number }, otherX: number, otherZ: number): void {
+    const p = this.saveData.player;
+    const dx = p.x - otherX;
+    const dz = p.z - otherZ;
+    const d = Math.hypot(dx, dz) || 1;
+    const back = 2.5 + Math.min(7, res.impactSpeed * 0.55);
+    p.x += (dx / d) * back;
+    p.z += (dz / d) * back;
+    p.speed = 0;
+    p.throttle = 0;
+    p.isStopping = true;
+    const FAST = 9;
+    res.damageA = res.impactSpeed > FAST
+      ? res.damageA * Math.min(1, 0.4 + (res.impactSpeed - FAST) / 12)
+      : res.damageA * 0.12;
+  }
+
   private resolveAllCollisions(dt: number): void {
     for (const [k, t] of Array.from(this.collisionCooldowns.entries())) {
       if (t - dt <= 0) this.collisionCooldowns.delete(k);
@@ -8041,9 +8938,10 @@ export class OceanEngine {
         { aHeading: p.heading }
       );
       if (res.collided) {
+        this.softenPlayerCollision(res, rk.x, rk.z);
         p.x += res.pushAx;
         p.z += res.pushAz;
-        if (res.impactSpeed > 0.5) p.speed = res.knockbackSpeedA;
+        if (res.impactSpeed > 0.5) p.speed = 0;
         if (res.damageA > 0 && !this.collisionCooldowns.has(rk.id)) {
           this.collisionCooldowns.set(rk.id, 0.75);
           p.condition.hull = Math.max(0, p.condition.hull - res.damageA);
@@ -8111,9 +9009,10 @@ export class OceanEngine {
         { aHeading: p.heading }
       );
       if (res.collided) {
+        this.softenPlayerCollision(res, wr.x, wr.z);
         p.x += res.pushAx;
         p.z += res.pushAz;
-        if (res.impactSpeed > 0.5) p.speed = res.knockbackSpeedA;
+        if (res.impactSpeed > 0.5) p.speed = 0;
         if (res.damageA > 0 && !this.collisionCooldowns.has(wr.id)) {
           this.collisionCooldowns.set(wr.id, 0.75);
           p.condition.hull = Math.max(0, p.condition.hull - res.damageA);
@@ -8184,12 +9083,13 @@ export class OceanEngine {
         { aHeading: p.heading, bHeading: m.heading }
       );
       if (res.collided) {
+        this.softenPlayerCollision(res, m.x, m.z);
         p.x += res.pushAx;
         p.z += res.pushAz;
         m.x += res.pushBx;
         m.z += res.pushBz;
         if (res.impactSpeed > 0.5) {
-          p.speed = res.knockbackSpeedA;
+          p.speed = 0;
           m.speed = res.knockbackSpeedB;
         }
         if ((res.damageA > 0 || res.damageB > 0) && !this.collisionCooldowns.has(m.id)) {
@@ -8292,7 +9192,7 @@ export class OceanEngine {
     // 4. Player vs Pirates & Ghost Ships
     for (const entry of this.pirates.values()) {
       const pir = entry.data;
-      if (pir.defeated) continue;
+      if (pir.defeated || pir.playerId) continue;
       const pirVx = -Math.sin(pir.heading) * pir.speed;
       const pirVz = -Math.cos(pir.heading) * pir.speed;
       const pirRadius = Math.max(entry.halfBeam * 1.15, entry.halfLength * 0.54);
@@ -8316,12 +9216,13 @@ export class OceanEngine {
         { aHeading: p.heading, bHeading: pir.heading }
       );
       if (res.collided) {
+        this.softenPlayerCollision(res, pir.x, pir.z);
         p.x += res.pushAx;
         p.z += res.pushAz;
         pir.x += res.pushBx;
         pir.z += res.pushBz;
         if (res.impactSpeed > 0.5) {
-          p.speed = res.knockbackSpeedA;
+          p.speed = 0;
           pir.speed = res.knockbackSpeedB;
         }
         if ((pir.ramCommitTimer ?? 0) > 0) {
@@ -9038,6 +9939,7 @@ export class OceanEngine {
     const snapshot = this.getSaveSnapshot();
     this.callbacks.onSaveUpdate(snapshot);
     saveVoyageToStorage(snapshot);
+    this.notifyPvpDown(lostGold);
     this.callbacks.onPlayerDeath?.({ cause, lostGold });
     this.pushNotification('You lost all carried resources and gold. Your ship, upgrades and crew remain. Emergency supplies: 40 provisions and 42 fresh water. Respawning near another captain…');
     if (!this.callbacks.onPlayerDeath) this.respawnAfterDeath({ x: 0, z: 0, heading: 0 });
@@ -9235,6 +10137,8 @@ export class OceanEngine {
           food: mon.carcassRemainingFood ?? 0,
           salt: mon.carcassRemainingSalt ?? 0,
           distance: Math.round(d),
+          sizeTier: MONSTER_FISH_TIER[mon.size] ?? 5,
+          castCost: getFishingCastCost(MONSTER_FISH_TIER[mon.size] ?? 5),
         };
       }
     }
@@ -9255,6 +10159,8 @@ export class OceanEngine {
             food: wa.lootFood,
             salt: wa.lootSalt ?? 1,
             distance: Math.round(d),
+            sizeTier: WILDLIFE_FISH_TIER[wa.species] ?? 2,
+            castCost: getFishingCastCost(WILDLIFE_FISH_TIER[wa.species] ?? 2),
           };
         }
       }
@@ -9282,6 +10188,16 @@ export class OceanEngine {
           distance: Math.round(d),
         };
       }
+    }
+
+    const nearPlayer = this.findNearbyPlayer();
+    if (nearPlayer) {
+      best = {
+        kind: 'player',
+        id: nearPlayer.id,
+        label: `Hail Captain of ${nearPlayer.name} — trade or attack`,
+        distance: nearPlayer.distance,
+      };
     }
 
     for (const entry of this.merchants.values()) {
@@ -9313,14 +10229,7 @@ export class OceanEngine {
       const mon = entry.data;
       const d = Math.hypot(mon.x - px, mon.z - pz);
       if (mon.defeated && !mon.carcassHarvested && (mon.carcassRemainingFood ?? 0) > 0) {
-        if (d < 56 && (!best || d < best.distance)) {
-          best = {
-            kind: 'monster_carcass',
-            id: mon.id,
-            label: `Fish ${mon.name} Carcass (+${mon.carcassRemainingFood} Food, +${mon.carcassRemainingSalt ?? 0} Salt)`,
-            distance: Math.round(d),
-          };
-        }
+        // Carcasses are fished with [F], not [E].
         continue;
       }
       if (mon.defeated || mon.tamed) continue;
@@ -9334,19 +10243,8 @@ export class OceanEngine {
       }
     }
 
-    for (const entry of this.wildlife.values()) {
-      const wa = entry.data;
-      if (wa.domain !== 'ocean' || wa.dead || wa.harvested) continue;
-      const d = Math.hypot(wa.x - px, wa.z - pz);
-      if (d < 40 && (!best || d < best.distance)) {
-        const spec = WILDLIFE_SPECS[wa.species];
-        best = {
-          kind: 'sea_wildlife',
-          id: wa.id,
-          label: `Fish ${spec.label} (+${wa.lootFood} Food, +${wa.lootSalt ?? 1} Salt)`,
-          distance: Math.round(d),
-        };
-      }
+    for (const _entry of this.wildlife.values()) {
+      // Sea creatures are fished with [F], not [E] (see getNearbyFishTarget).
     }
 
     for (const entry of this.pirates.values()) {
@@ -9392,231 +10290,8 @@ export class OceanEngine {
     return best;
   }
 
-  // --- Hidden Admin Mode (Session-Only Testing & Event Console) ---
 
-  public unlockAdminMode(password: string): boolean {
-    if (password.trim() !== 'rgb') return false;
-    this.adminUnlocked = true;
-    this.adminEnabled = true;
-    this.sound.playShipBell();
-    this.pushNotification('Admin Mode Unlocked (Session Active).');
-    this.emitHud();
-    return true;
-  }
-
-  public toggleAdminMode(enabled?: boolean): boolean {
-    if (!this.adminUnlocked) return false;
-    this.adminEnabled = enabled !== undefined ? enabled : !this.adminEnabled;
-    this.pushNotification(this.adminEnabled ? 'Admin Mode Enabled.' : 'Admin Mode Disabled.');
-    this.emitHud();
-    return this.adminEnabled;
-  }
-
-  public getAdminTeleportTargets(): AdminTeleportTarget[] {
-    const px = this.saveData.player.x;
-    const pz = this.saveData.player.z;
-    const out: AdminTeleportTarget[] = [];
-
-    for (const isl of this.islands.values()) {
-      const d = isl.data;
-      out.push({
-        id: `island_${d.id}`,
-        kind: 'island_shore',
-        label: `Island: ${d.name} (${d.biome})`,
-        x: d.dockX,
-        z: d.dockZ,
-        distance: Math.round(Math.hypot(d.dockX - px, d.dockZ - pz)),
-      });
-    }
-
-    for (const m of this.merchants.values()) {
-      if (m.data.sunk) continue;
-      if (m.data.battleId) {
-        out.push({
-          id: `battle_${m.data.id}`,
-          kind: 'major_battle',
-          label: `Major Battle (${m.data.name})`,
-          x: m.data.x,
-          z: m.data.z,
-          distance: Math.round(Math.hypot(m.data.x - px, m.data.z - pz)),
-        });
-      } else if (m.data.isCrown) {
-        out.push({
-          id: `crown_${m.data.id}`,
-          kind: 'crown_armada',
-          label: `Crown Ship: ${m.data.name}`,
-          x: m.data.x,
-          z: m.data.z,
-          distance: Math.round(Math.hypot(m.data.x - px, m.data.z - pz)),
-        });
-      }
-    }
-    for (const p of this.pirates.values()) {
-      if (p.data.defeated) continue;
-      if (p.data.isGhost) {
-        out.push({
-          id: `ghost_${p.data.id}`,
-          kind: 'ghost_ship',
-          label: `Ghost (${(p.data.ghostSize ?? 'medium').toUpperCase()}): ${p.data.name}`,
-          x: p.data.x,
-          z: p.data.z,
-          distance: Math.round(Math.hypot(p.data.x - px, p.data.z - pz)),
-        });
-      } else if (p.data.isBoss) {
-        out.push({
-          id: `boss_${p.data.id}`,
-          kind: 'pirate_boss',
-          label: `Pirate Boss: ${p.data.name}`,
-          x: p.data.x,
-          z: p.data.z,
-          distance: Math.round(Math.hypot(p.data.x - px, p.data.z - pz)),
-        });
-      } else if (p.data.fleetId || p.data.isFlagship) {
-        out.push({
-          id: `pir_${p.data.id}`,
-          kind: 'pirate_armada',
-          label: `Pirate Armada: ${p.data.name}`,
-          x: p.data.x,
-          z: p.data.z,
-          distance: Math.round(Math.hypot(p.data.x - px, p.data.z - pz)),
-        });
-      }
-    }
-
-    // Always include direct synthetic warp presets so every category is one click away
-    const presets: AdminTeleportTarget[] = [
-      { id: 'preset_island_shore', kind: 'island_shore', label: 'Coral Haven Beach Landing', x: 164, z: 188, distance: Math.round(Math.hypot(164 - px, 188 - pz)) },
-      { id: 'preset_settlement', kind: 'settlement', label: 'Coral Haven Fishing Village', x: 174, z: 130, distance: Math.round(Math.hypot(174 - px, 130 - pz)) },
-      { id: 'preset_icefield', kind: 'icefield', label: 'Frozen Reach Icebergs & Ice Sheets', x: 180, z: -860, distance: Math.round(Math.hypot(180 - px, -860 - pz)) },
-      { id: 'preset_crown', kind: 'crown_armada', label: 'Crown Royal Armada (Warp / Spawn)', x: px + 1400, z: pz - 1200, distance: 1844 },
-      { id: 'preset_pirate', kind: 'pirate_armada', label: 'Pirate Armada Squadron (Warp / Spawn)', x: px - 1400, z: pz - 1100, distance: 1780 },
-      { id: 'preset_boss', kind: 'pirate_boss', label: 'Pirate Faction Boss (Warp / Spawn)', x: px + 2200, z: pz + 1600, distance: 2720 },
-      { id: 'preset_battle', kind: 'major_battle', label: 'Major Naval Battle (Warp / Spawn)', x: px - 1900, z: pz + 1800, distance: 2617 },
-      { id: 'preset_ghost', kind: 'ghost_ship', label: 'Ghost Ship Encounter (Warp / Spawn)', x: px + 2800, z: pz - 2400, distance: 3687 },
-    ];
-    return [...out.slice(0, 12), ...presets];
-  }
-
-  public adminTeleportNear(targetId: string): { ok: boolean; message: string } {
-    if (!this.adminEnabled) return { ok: false, message: 'Enable Admin Mode first.' };
-    const targets = this.getAdminTeleportTargets();
-    const target = targets.find((t) => t.id === targetId);
-    if (!target) return { ok: false, message: 'Teleport target not found.' };
-
-    if (this.fps.active) this.fps.exitIsland();
-
-    if (target.id === 'preset_island_shore') {
-      this.saveData.player.x = 164;
-      this.saveData.player.z = 188;
-      this.saveData.player.heading = -0.8;
-    } else if (target.id === 'preset_settlement') {
-      this.saveData.player.x = 174;
-      this.saveData.player.z = 130;
-      this.saveData.player.heading = -Math.PI / 2;
-    } else if (target.id === 'preset_icefield') {
-      this.saveData.player.x = target.x;
-      this.saveData.player.z = target.z;
-      this.saveData.player.heading = 0;
-    } else if (target.kind === 'island_shore') {
-      this.saveData.player.x = target.x - 16;
-      this.saveData.player.z = target.z + 12;
-    } else {
-      this.saveData.player.x = target.x - 105;
-      this.saveData.player.z = target.z + 45;
-    }
-    this.saveData.player.speed = 0;
-    this.saveData.player.throttle = 0;
-    this.streamWorldAroundPlayer();
-
-    if (target.kind !== 'island_shore' && target.kind !== 'settlement') {
-      for (const isl of this.islands.values()) {
-        const dx = this.saveData.player.x - isl.data.x;
-        const dz = this.saveData.player.z - isl.data.z;
-        const d = Math.hypot(dx, dz);
-        const minClear = isl.data.radius + 22;
-        if (d < minClear) {
-          const ang = d > 0.01 ? Math.atan2(dz, dx) : -Math.PI * 0.5;
-          this.saveData.player.x = isl.data.x + Math.cos(ang) * minClear;
-          this.saveData.player.z = isl.data.z + Math.sin(ang) * minClear;
-        }
-      }
-      for (const ib of this.icebergs.values()) {
-        const dx = this.saveData.player.x - ib.data.x;
-        const dz = this.saveData.player.z - ib.data.z;
-        const d = Math.hypot(dx, dz);
-        const minClear = ib.data.radius + 16;
-        if (d < minClear) {
-          const ang = d > 0.01 ? Math.atan2(dz, dx) : 0;
-          this.saveData.player.x = ib.data.x + Math.cos(ang) * minClear;
-          this.saveData.player.z = ib.data.z + Math.sin(ang) * minClear;
-        }
-      }
-    }
-
-    if (target.id === 'preset_ghost') {
-      this.adminSpawnGhostShip('colossal');
-    } else if (target.id === 'preset_boss') {
-      const fid = PIRATE_FACTION_IDS[Math.floor(this.rand() * PIRATE_FACTION_IDS.length)];
-      const boss = generatePirateShip(`admin_boss_${Math.floor(this.simTime)}`, target.x, target.z, 'dreadnought', this.rand, {
-        factionId: fid,
-        isBoss: true,
-        isFlagship: true,
-        rank: 6,
-      });
-      this.spawnAdminPirate(boss);
-    } else if (target.id === 'preset_pirate' || target.id === 'preset_battle') {
-      const fid = PIRATE_FACTION_IDS[Math.floor(this.rand() * PIRATE_FACTION_IDS.length)];
-      const sqFleetId = `admin_armada_${Math.floor(this.simTime)}`;
-      for (let i = 0; i < 3; i++) {
-        const pir = generatePirateShip(
-          `admin_arm_${Math.floor(this.simTime)}_${i}`,
-          target.x + i * 38,
-          target.z + (i % 2) * 36,
-          i === 0 ? 'galleon' : 'brigantine',
-          this.rand,
-          { factionId: fid, isFlagship: i === 0, fleetId: sqFleetId }
-        );
-        if (target.id === 'preset_battle') pir.battleId = `admin_battle_${Math.floor(this.simTime)}`;
-        this.spawnAdminPirate(pir);
-      }
-    }
-
-    // Snap biome palette, ship transform, ocean patch, camera & render immediately on warp
-    const px = this.saveData.player.x;
-    const pz = this.saveData.player.z;
-    this.currentBiome = getOceanBiome(px, pz, this.saveData.seed);
-    const bCfg = getBiomeConfig(this.currentBiome);
-    this.biomeDeepColor.setHex(bCfg.deepColorHex);
-    this.biomeShallowColor.setHex(bCfg.shallowColorHex);
-    this.playerShip.root.position.set(px, 0, pz);
-    this.playerShip.root.rotation.y = this.saveData.player.heading;
-
-    const snapOx = Math.floor(px / 12) * 12;
-    const snapOz = Math.floor(pz / 12) * 12;
-    this.oceanMesh.position.set(snapOx, 0, snapOz);
-    this.oceanUniforms.uOffset.value.set(snapOx, snapOz);
-    this.oceanUniforms.uBoatPos.value.set(px, 0, pz);
-
-    const desiredDist = this.camDist + (this.saveData.player.upgrades.hullTier - 1) * 3.8;
-    const horiz = Math.cos(this.camPitch) * desiredDist;
-    this.currentCamPos.set(
-      px + Math.sin(this.camYaw) * horiz,
-      2.6 + Math.sin(this.camPitch) * desiredDist,
-      pz + Math.cos(this.camYaw) * horiz
-    );
-    this.currentLookAt.set(px, 2.6 + (this.saveData.player.upgrades.hullTier - 1) * 0.65, pz);
-    this.camera.position.copy(this.currentCamPos);
-    this.camera.lookAt(this.currentLookAt);
-
-    this.updateAtmosphereVisuals(1.0);
-    this.renderer.render(this.scene, this.camera);
-
-    this.pushNotification(`Admin Warped near ${target.label}.`);
-    this.emitHud();
-    return { ok: true, message: `Teleported near ${target.label}.` };
-  }
-
-  private spawnAdminPirate(pir: PirateShipData): void {
+  private spawnPirateInstance(pir: PirateShipData): void {
     const built = buildNpcShip(
       pir.hullArchetype,
       'pirate',
@@ -9711,11 +10386,6 @@ export class OceanEngine {
     return { ok: true, message: `Projected ${contract.tierLabel}: ${contract.targetName} (${contract.rewardGold}g).` };
   }
 
-  public adminProjectBounty(): { ok: boolean; message: string } {
-    if (!this.adminEnabled) return { ok: false, message: 'Admin Mode is disabled.' };
-    return this.projectBountyOffer(true);
-  }
-
   public acceptBounty(): void {
     const b = this.saveData.bounty;
     if (!b || b.status !== 'offered') return;
@@ -9761,7 +10431,7 @@ export class OceanEngine {
       pir.behavior = 'patrol';
       pir.patrolCenterX = tx;
       pir.patrolCenterZ = tz;
-      this.spawnAdminPirate(pir);
+      this.spawnPirateInstance(pir);
     } else {
       const ves = generateMerchantShip(b.targetShipId, tx, tz, crownClass, this.rand);
       ves.name = b.targetName;
@@ -9816,7 +10486,7 @@ export class OceanEngine {
         hunterPir.discovered = true;
         hunterPir.heading = Math.atan2(-(tx - hx), -(tz - hz));
         hunterPir.behavior = 'hunt_npc';
-        this.spawnAdminPirate(hunterPir);
+        this.spawnPirateInstance(hunterPir);
       }
     }
     b.rivalHunterIds = rivalIds;
@@ -10008,165 +10678,6 @@ export class OceanEngine {
     }
     this.flushImmediateSave();
     this.emitHud();
-  }
-
-  public adminRestoreMaxResources(): { ok: boolean; message: string } {
-    if (!this.adminEnabled) return { ok: false, message: 'Admin Mode is disabled.' };
-    const p = this.saveData.player;
-    p.gold = 99999;
-    p.condition = { hull: 100, sails: 100, mast: 100, steering: 100, cannons: 100, deck: 100, flooding: 0 };
-    p.upgrades = {
-      ...p.upgrades,
-      hullTier: 7,
-      hullLengthBonus: 3,
-      hullWidthBonus: 3,
-      deckLevel: 3,
-      reinforcementTier: 3,
-      armorPlating: 4,
-      sailTier: 4,
-      extraMast: true,
-      steeringTier: 4,
-      storageTier: 4,
-      crowsNest: true,
-      medicalBay: true,
-      repairStation: true,
-      weaponType: 'specialised',
-      cannonCount: 24,
-      cannonUpgrades: { damageLvl: 4, accuracyLvl: 4, reloadLvl: 4, durabilityLvl: 4 },
-    };
-    (Object.keys(RESOURCE_DEFS) as ResourceId[]).forEach((rid) => {
-      const def = RESOURCE_DEFS[rid];
-      p.inventory[rid] = def.rarity === 'Common' ? 95 : 45;
-    });
-    const bonusRoles: CrewRole[] = ['sailor', 'cannoneer', 'repair', 'lookout', 'navigator'];
-    let crewIdx = 0;
-    while (p.crew.length < 16) {
-      const role = bonusRoles[crewIdx % bonusRoles.length];
-      p.crew.push(createRandomCrewMember(`admin_crew_${Date.now()}_${crewIdx}`, this.rand, role, false));
-      crewIdx++;
-    }
-    p.crew.forEach((c) => {
-      c.health = 100;
-      c.morale = 100;
-      c.loyalty = 100;
-      c.condition = 'healthy';
-    });
-    this.clearPlayerDamageMarks();
-    this.rebuildPlayerShipMesh();
-    this.sound.playCoinChime();
-    this.pushNotification('Admin: Max Sovereign Flagship, 99,999 Gold & Full Stores!');
-    this.emitHud();
-    return { ok: true, message: 'Restored Sovereign Flagship, max cannons, 99,999 gold & full stores.' };
-  }
-
-  public adminSpawnMaxFleet(): { ok: boolean; message: string } {
-    if (!this.adminEnabled) return { ok: false, message: 'Admin Mode is disabled.' };
-    const p = this.saveData.player;
-    if (p.upgrades.hullTier < 3) {
-      p.upgrades.hullTier = 3;
-      this.rebuildPlayerShipMesh();
-    }
-    const bonusRoles: CrewRole[] = ['sailor', 'cannoneer', 'repair', 'lookout', 'navigator'];
-    let cIdx = 0;
-    while (p.crew.length < 12) {
-      p.crew.push(createRandomCrewMember(`admin_fleet_crew_${Date.now()}_${cIdx}`, this.rand, bonusRoles[cIdx % bonusRoles.length], false));
-      cIdx++;
-    }
-    const classes: FleetShipClass[] = ['heavy_warship', 'heavy_warship', 'large_merchant', 'medium_armed', 'fast_scout'];
-    let added = 0;
-    while (this.saveData.fleet.filter((f) => !f.sunk).length < MAX_FLEET_SIZE) {
-      const slot = this.saveData.fleet.filter((f) => !f.sunk).length;
-      const cls = classes[slot % classes.length];
-      const ship = createFleetShip(
-        `admin_fleet_${Date.now()}_${slot}`,
-        cls,
-        slot,
-        this.saveData.player.x,
-        this.saveData.player.z,
-        this.saveData.player.heading,
-        this.rand
-      );
-      ship.hullTier = 5;
-      ship.deckLevel = 2;
-      ship.cannonTier = 4;
-      ship.cannons = ship.maxCannons;
-      ship.maxHull = Math.round(ship.maxHull * 1.45);
-      ship.hull = ship.maxHull;
-      ship.crewCount = ship.maxCrew;
-      this.saveData.fleet.push(ship);
-      added++;
-    }
-    this.syncFleetMeshes(true);
-    this.sound.playShipBell();
-    this.pushNotification(`Admin: ${added > 0 ? 'Spawned max 5-ship Armada Fleet!' : 'Fleet upgraded to 5 max warships!'}`);
-    this.emitHud();
-    return { ok: true, message: '5-ship max Fleet ready in wedge formation!' };
-  }
-
-  public adminSpawnColossalCompanion(): { ok: boolean; message: string } {
-    if (!this.adminEnabled) return { ok: false, message: 'Admin Mode is disabled.' };
-    const monster = generateSeaMonster(
-      `admin_colossal_${Date.now()}`,
-      this.saveData.player.x + 24,
-      this.saveData.player.z - 24,
-      this.rand,
-      true
-    );
-    const companion = {
-      id: monster.id,
-      name: `Sovereign ${monster.name}`,
-      species: monster.species,
-      size: 'legendary' as const,
-      hp: Math.max(1250, monster.maxHp),
-      maxHp: Math.max(1250, monster.maxHp),
-      damage: Math.max(68, monster.damage),
-      x: this.saveData.player.x + 24,
-      z: this.saveData.player.z - 24,
-      heading: this.saveData.player.heading,
-    };
-    this.saveData.tamedMonsters.push(companion);
-    this.syncTamedCompanions();
-    this.sound.playMonsterRoar();
-    this.pushNotification(`Admin: Summoned Colossal Sea Companion (${companion.name})!`);
-    this.emitHud();
-    return { ok: true, message: `Summoned ${companion.name}!` };
-  }
-
-  public adminSpawnGhostShip(size: GhostSizeTier = 'medium'): { ok: boolean; message: string } {
-    if (!this.adminEnabled) return { ok: false, message: 'Admin Mode is disabled.' };
-    const ang = this.saveData.player.heading;
-    const gx = this.saveData.player.x - Math.sin(ang) * 105;
-    const gz = this.saveData.player.z - Math.cos(ang) * 105;
-    const ghost = generateGhostShip(`admin_ghost_${size}_${Math.floor(this.simTime)}`, gx, gz, this.rand, size);
-    ghost.discovered = true;
-    ghost.behavior = 'pursue';
-    this.spawnAdminPirate(ghost);
-    this.sound.playGhostWhisper();
-    this.pushNotification(`Admin: Summoned ${size.toUpperCase()} Ghost Ship "${ghost.name}" ahead!`);
-    this.emitHud();
-    return { ok: true, message: `Spawned ${size} Ghost Ship "${ghost.name}" 105m ahead.` };
-  }
-
-  public adminSetWeather(type: WeatherType): { ok: boolean; message: string } {
-    if (!this.adminEnabled) return { ok: false, message: 'Admin Mode is disabled.' };
-    if (!ALL_WEATHER_TYPES.includes(type)) return { ok: false, message: 'Unknown weather type.' };
-    const built = buildWeatherStateFromType(type, this.saveData.weather.windDir, 120);
-    this.saveData.weather = built;
-    this.saveData.weatherForecast = generateWeatherForecast(type, 120, this.rand, 3);
-    if (type === 'tornado') {
-      this.tornadoPos = {
-        x: this.saveData.player.x - Math.sin(this.saveData.player.heading) * 95,
-        z: this.saveData.player.z - Math.cos(this.saveData.player.heading) * 95,
-        vx: 6,
-        vz: 4,
-        active: true,
-      };
-    } else {
-      this.tornadoPos.active = false;
-    }
-    this.pushNotification(`Admin Weather Forced: ${WEATHER_PRESETS[type].label}`);
-    this.emitHud();
-    return { ok: true, message: `Weather set to ${WEATHER_PRESETS[type].label}.` };
   }
 
   private emitHud(): void {
@@ -10408,8 +10919,6 @@ export class OceanEngine {
       nearbyGhostWarning: this.nearbyGhostActive,
       nearbyMajorBattle: this.nearbyMajorBattleActive ? 'Major Fleet Battle' : null,
       activeTornadoWarning: tornadoNearby,
-      adminUnlocked: this.adminUnlocked,
-      adminEnabled: this.adminEnabled,
       notification: this.notificationText,
       damageBanner: null,
       damageNotifications: this.damageNotifications.map((n) => ({ ...n })),
